@@ -144,5 +144,5 @@ export async function buildActor(entry, index, content, report, helpers) {
   }
   if (r.spellcastingHidden) report.incomplete.add(`${r.name}: hidden spellcasting metadata requires verification`);
   bindEmbeddedResources(items);
-  return {_id,name:r.name,type,system,items,flags:{bcc:{sourceId:content.sourceId,category:kind,identity:entry.key,converterVersion:"0.0.6",dependency:!!r._bccDependency}},prototypeToken:{name:r.name,actorLink:false}};
+  return {_id,name:r.name,type,system,items,flags:{bcc:{sourceId:content.sourceId,category:kind,identity:entry.key,converterVersion:"0.0.7",dependency:!!r._bccDependency}},prototypeToken:{name:r.name,actorLink:false}};
 }

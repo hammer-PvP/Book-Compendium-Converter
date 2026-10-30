@@ -32,6 +32,21 @@ export function applyNativeTraits(record, adv, add, report,index) {
     const category=trait==="weapon"?(metadata.weaponCategory==="martial"?"mar":"sim"):{LA:"lgt",MA:"med",HA:"hvy",S:"shl"}[String(metadata.type).split("|")[0]];
     return category?`${category}:${key}`:null;
   }
+  function weaponFilter(filter){
+    const properties={light:"L",finesse:"F","two-handed":"2H",thrown:"T",versatile:"V",heavy:"H",reach:"R",ammunition:"A",loading:"LD"};
+    const clauses=String(filter).toLowerCase().split("|").map(x=>x.split("="));
+    if(clauses.some(([key])=>!["type","property","rarity"].includes(key))){report.incomplete.add(`${record.name}: unsupported proficiency filter ${filter}`);return [];}
+    const names=Object.values(index?.proficiencyItems??{}).filter(r=>{
+      const type=String(r.type).split("|")[0];if(!["M","R"].includes(type))return false;
+      return clauses.every(([key,value])=>{
+        const options=value.split(";");
+        if(key==="type")return options.some(v=>({"martial weapon":r.weaponCategory==="martial","simple weapon":r.weaponCategory==="simple","melee weapon":type==="M","ranged weapon":type==="R"})[v]);
+        if(key==="rarity")return value==="none";
+        return options.some(v=>{const neg=v.startsWith("!"),code=properties[neg?v.slice(1):v];return code&&(neg?!(r.property??[]).includes(code):(r.property??[]).includes(code));});
+      });
+    });
+    return [...new Set(names.map(r=>specific(r.name,"weapon")).filter(Boolean).map(k=>`weapon:${k}`))];
+  }
   function traits(title, field, category, map) {
     const grants = new Set(), choices = [];
     const convert = name => {const key = map?.(lc(name));return key ? `${category}:${key}` : null;};
@@ -43,6 +58,8 @@ export function applyNativeTraits(record, adv, add, report,index) {
         const subset=({anyStandard:"standard",anyArtisansTool:"art",anyGamingSet:"game",anyMusicalInstrument:"music"})[key];
         choices.push({count:Number(count),pool:[`${category}:${subset?`${subset}:`:""}*`]});
       }
+      if(category==="weapon"&&block.all?.fromFilter){const pool=weaponFilter(block.all.fromFilter);for(const key of pool)grants.add(key);if(!pool.length)report.incomplete.add(`${record.name}: empty proficiency filter ${block.all.fromFilter}`);}
+      if(category==="weapon"&&block.choose?.fromFilter){const pool=weaponFilter(block.choose.fromFilter);if(pool.length)choices.push({count:Number(block.choose.count??1),pool});else report.incomplete.add(`${record.name}: empty proficiency choice ${block.choose.fromFilter}`);}
       for (const choice of list(block.choose)) if (Array.isArray(choice?.from)) {
         const pool = choice.from.map(convert).filter(Boolean);
         if (pool.length) choices.push({count:Number(choice.count ?? 1),pool});

@@ -1,3 +1,5 @@
+import {normalizeSpellRecipes} from "./spell-recipes.mjs";
+import {specialEquipmentReference} from "./equipment.mjs";
 import {parseSpellFilter,matchesSpellMetadata} from "./spell-filter.mjs";
 import {equipmentCategoryPool} from "./equipment.mjs";
 import {attachedSpellRecipes} from "./item-spells.mjs";
@@ -99,20 +101,23 @@ export async function readLibraryBook(id) {
     }
   }
   const selected = new Map(), queue = [];
-  function include(kind, record, dependency = false) {
+  const belongsToBook=r=>canon(r.source)===canon(sourceId)||(r.otherSources??[]).some(s=>canon(s.source)===canon(sourceId));
+  const reasonFor=(owner,relation)=>`${owner.name}|${owner.source}: ${relation}`;
+  function include(kind, record, dependency = false, reason = "explicit book reference") {
     if (!record) return;
-    const key = identity(kind, record); if (selected.has(key)) return;
+    const key = identity(kind, record);
+    if(selected.has(key)){const prior=selected.get(key).record;if(prior._bccDependency&&!prior._bccDependencyReasons.includes(reason))prior._bccDependencyReasons.push(reason);return;}
     const overlay = findSupplement(kind, record, foundry);
-    const result = overlay?.entryData ? merge(record, overlay.entryData) : clone(record);
-    result._bccDependency = dependency; result._bccIgnored=!!overlay?.isIgnored;
+    const result = normalizeSpellRecipes(overlay?.entryData ? merge(record, overlay.entryData) : clone(record));
+    result._bccDependency = dependency&&!belongsToBook(record); result._bccDependencyReasons=result._bccDependency?[reason]:[]; result._bccIgnored=!!overlay?.isIgnored;
     if(kind==="monster" && record.legendaryGroup)result._bccLegendary=(data["bestiary/legendarygroups.json"]?.legendaryGroup??[]).find(g=>canon(g.name)===canon(record.legendaryGroup.name)&&canon(g.source)===canon(record.legendaryGroup.source)); selected.set(key, {kind, record: result}); queue.push({kind, record: result});
     for (const [childKind, children] of Object.entries(overlay?.subEntities ?? {})) for (const child of children) {
       if (!raw[childKind]) { issues.push({category: kind, name: record.name, message: `Unsupported subentity ${childKind}`}); continue; }
-      raw[childKind].push(child); include(childKind, child, true);
+      raw[childKind].push(child); include(childKind, child, true, reasonFor(record,"supplemental subentity"));
     }
   }
   for (const kind of KINDS) for (const record of catalog(kind)) if (canon(record.source) === canon(sourceId)||(record.otherSources??[]).some(s=>canon(s.source)===canon(sourceId))) include(kind, record);
-  async function resolve(kind, uid, fallback) {
+  async function resolve(kind, uid, fallback, reason="explicit book reference") {
     if (!raw[kind]) return;
     const parts = String(uid).replace(/#.*$/,"").split("|"); let [name, source] = parts;
     if (kind === "classFeature") source = parts[4] || parts[2] || "PHB";
@@ -124,18 +129,31 @@ export async function readLibraryBook(id) {
     const classSource=parts[2]||"PHB",subclassSource=parts[4]||classSource;
     const found = candidates.find(r => kind === "classFeature" ? canon(r.className) === canon(parts[1]) && canon(r.classSource) === canon(classSource) && Number(r.level) === Number(parts[3])
       : kind === "subclassFeature" ? canon(r.className) === canon(parts[1]) && canon(r.classSource) === canon(classSource) && canon(r.subclassShortName) === canon(parts[3]) && canon(r.subclassSource) === canon(subclassSource) && Number(r.level) === Number(parts[5]) : true);
-    include(kind, found, true);
+    include(kind, found, true,reason);
   }
   for(const [kind,uid] of bookReferences)await resolve(kind,uid,sourceId);
   const lookup = data["generated/gendata-spell-source-lookup.json"], recipeCache=new Map();
   for (let pos = 0; pos < queue.length; pos++) {
     if (queue.length > 15000) throw Error("Grafo de dependências excedeu o limite de 15000 entidades.");
-    const {kind, record} = queue[pos], refs = kind==="spell"?[]:collectReferences(record);
+    const {kind, record} = queue[pos], refs = [];
+    // Narrative links are rendered when available; they do not expand publication scope.
+    // Native activity references and structured mechanical fields are mandatory.
+    const mechanical={...record};for(const key of ["entries","fluff","additionalEntries","startingEquipment"])delete mechanical[key];
+    collectReferences(mechanical,refs);
+    function featureReferences(v){
+      if(Array.isArray(v))v.forEach(featureReferences);
+      else if(v&&typeof v==="object"){
+        for(const key of ["classFeature","subclassFeature","optionalfeature"])if(typeof v[key]==="string")refs.push([key,v[key]]);
+        Object.values(v).forEach(featureReferences);
+      }
+    }
+    featureReferences(record.entries);
     if(record.startingEquipment){
       const categories=new Set();
-      function scan(v){if(Array.isArray(v))v.forEach(scan);else if(v&&typeof v==="object"){if(v.equipmentType)categories.add(v.equipmentType);Object.values(v).forEach(scan);}}
-      scan(record.startingEquipment);
-      for(const category of categories)for(const item of equipmentCategoryPool(catalog("item"),category,{...record,_bccRules:ruleOf(record)??sourceRules.get(canon(record.source))}))include("item",item,true);
+      function scan(v){if(typeof v==="string"){refs.push(["item",v]);return;}if(Array.isArray(v))v.forEach(scan);else if(v&&typeof v==="object"){if(v.equipmentType)categories.add(v.equipmentType);for(const type of v.equipmentTypes??[])categories.add(type);
+          if(v.item)refs.push(["item",v.item]);if(v.special){const ref=specialEquipmentReference(v.special,catalog("item"),record);if(ref)refs.push(["item",ref]);}Object.values(v).forEach(scan);}}
+      scan(record.startingEquipment.defaultData??record.startingEquipment);
+      for(const category of categories)for(const item of equipmentCategoryPool(catalog("item"),category,{...record,_bccRules:ruleOf(record)??sourceRules.get(canon(record.source))}))include("item",item,true,reasonFor(record,`starting equipment category ${category}`));
     }
     for(const spec of attachedSpellRecipes(record))refs.push(["spell",spec.uid]);
     for(const value of [...(record.attachedItems??[]),...(record.gear??[])])refs.push(["item",typeof value==="string"?value:value.item??value.name]);
@@ -143,18 +161,25 @@ export async function readLibraryBook(id) {
     if (kind === "class" || kind === "subclass") {
       for (const ref of record[kind === "class" ? "classFeatures" : "subclassFeatures"] ?? []) if (typeof ref === "string") refs.push([kind === "class" ? "classFeature" : "subclassFeature", ref]);
       for (const step of record.optionalfeatureProgression ?? []) {
-        const all = catalog("optionalfeature").filter(r => (r.featureType ?? []).some(t => step.featureType?.includes(t)));
-        const local = all.filter(r => canon(r.source) === canon(record.source));
-        for (const option of local.length ? local : all) include("optionalfeature", option, true);
+        const local = catalog("optionalfeature").filter(r => (belongsToBook(r)||canon(r.source)===canon(record.source))&&(r.featureType ?? []).some(t => step.featureType?.includes(t)));
+        for (const option of local) include("optionalfeature", option, true,reasonFor(record,"feature selector in book or required parent class"));
       }
-      for (const step of record.featProgression ?? []) for (const feat of catalog("feat")) if (step.category?.includes(feat.category)) include("feat", feat, true);
-      if (kind === "subclass") await resolve("class", `${record.className}|${record.classSource}`, record.source);
+      for (const step of record.featProgression ?? []) for (const feat of catalog("feat")) if ((belongsToBook(feat)||canon(feat.source)===canon(record.source))&&step.category?.includes(feat.category)) include("feat", feat, true,reasonFor(record,"feat selector in book or required parent class"));
+      if (kind === "subclass") await resolve("class", `${record.className}|${record.classSource}`, record.source,reasonFor(record,"required parent class"));
       const name = kind === "class" ? record.name : record.className, source = kind === "class" ? record.source : record.classSource;
-      for (const [spellSource, spells] of Object.entries(lookup ?? {})) for (const [spellName, lists] of Object.entries(spells))
-        if (Object.entries(lists.class ?? {}).some(([s, classes]) => canon(s) === canon(source) && Object.keys(classes).some(n => canon(n) === canon(name)))) refs.push(["spell", `${spellName}|${spellSource}`]);
+      const memberships=Object.entries(lookup??{}).map(([src,spells])=>[src,Object.entries(spells).filter(([,lists])=>Object.entries(lists.class??{}).some(([s,classes])=>canon(s)===canon(source)&&Object.keys(classes).some(n=>canon(n)===canon(name))))]);
+      const allowed=new Set([canon(sourceId),canon(source)]);
+      // A supplemental class may declare a core spell list without publishing spells itself.
+      // Select a single rules-compatible base catalog, never every supplement in the lookup.
+      if(!memberships.some(([src,rows])=>allowed.has(canon(src))&&rows.length)){
+        const rules=ruleOf(record)??sourceRules.get(canon(record.source));
+        const base=memberships.filter(([src,rows])=>rows.length&&sourceRules.get(canon(src))===rules).sort((a,b)=>b[1].length-a[1].length)[0];
+        if(base)allowed.add(canon(base[0]));
+      }
+      for(const [src,spells] of memberships)if(allowed.has(canon(src)))for(const [spellName] of spells)await resolve("spell",`${spellName}|${src}`,record.source,reasonFor(record,"declared class spell list"));
     }
     for (const featSet of record.feats ?? []) for (const [feat,value] of Object.entries(featSet)){
-      if(feat==="any"||feat==="anyFromCategory"){for(const candidate of catalog("feat"))if(feat==="any"||value.category?.includes(candidate.category))include("feat",candidate,true);}
+      if(feat==="any"||feat==="anyFromCategory"){for(const candidate of catalog("feat"))if(belongsToBook(candidate)&&(feat==="any"||value.category?.includes(candidate.category)))include("feat",candidate,true,reasonFor(record,"feat selector in book or required parent class"));}
       else refs.push(["feat",feat]);
     }
     const selectors=new Set();
@@ -172,6 +197,7 @@ export async function readLibraryBook(id) {
       if(!recipeCache.has(filter)){
         const parsed=parseSpellFilter(filter),matches=[];
         if(parsed)for(const [src,spellEntries] of Object.entries(lookup??{})){
+          if(canon(src)!==canon(sourceId))continue;
           const names=new Set(Object.entries(spellEntries).filter(([,lists])=>!parsed.classes||Object.values(lists.class??{}).some(group=>Object.keys(group).some(n=>parsed.classes.includes(canon(n))))).map(([name])=>canon(name)));
           if(!names.size)continue;await loadSeries("spell",src);
           for(const candidate of catalog("spell"))if(canon(candidate.source)===canon(src)&&names.has(canon(candidate.name))&&matchesSpellMetadata(candidate,parsed))matches.push(["spell",`${candidate.name}|${candidate.source}`]);
@@ -180,7 +206,7 @@ export async function readLibraryBook(id) {
       }
       refs.push(...recipeCache.get(filter));
     }
-    for (const member of record._bccGroupItems ?? []) refs.push(["item", typeof member === "string" ? member : member.item]);
+    for (const member of [...(record._bccGroupItems??[]),...(record.packContents??[])]) refs.push(["item", typeof member === "string" ? member : member.item]);
     function spells(v) {
       if (typeof v === "string" && !/[=<>]/.test(v)) refs.push(["spell", v.replace(/#.*$/, "")]);
       else if (Array.isArray(v)) v.forEach(spells);
@@ -188,13 +214,14 @@ export async function readLibraryBook(id) {
     }
     spells(record.additionalSpells);
     if (kind === "monster") spells(record.spellcasting?.map(s => ({spells: s.spells, will: s.will, daily: s.daily, rest: s.rest, constant: s.constant,ritual:s.ritual,weekly:s.weekly})));
-    for (const [refKind, uid] of refs) if (uid) await resolve(refKind, uid, record.source);
+    for (const [refKind, uid] of refs) if (uid) await resolve(refKind, uid, record.source,reasonFor(record,"explicit mechanical reference"));
   }
   const records = Object.fromEntries(KINDS.map(kind => [kind, [...selected.values()].filter(x => x.kind === kind).map(x => x.record)]));
   for(const rows of Object.values(records))for(const r of rows)r._bccRules=ruleOf(r)??sourceRules.get(canon(r.source))??null;
   const chapters = volume?.bookData?.find(e => canon(e.id) === canon(sourceId))?.data ?? [];
-  return {book, sourceId, chapters, records, foundry, spellLookup: lookup,proficiencyItems:Object.fromEntries(raw.item.map(r=>[canon(r.name).replace(/[^a-z0-9]/g,""),{type:r.type,weaponCategory:r.weaponCategory}])),
+  return {book, sourceId, chapters, records, foundry, spellLookup: lookup,proficiencyItems:Object.fromEntries(raw.item.map(r=>[canon(r.name).replace(/[^a-z0-9]/g,""),{name:r.name,type:r.type,weaponCategory:r.weaponCategory,property:r.property??[],source:r.source}])),
     preparationIssues: [...new Map(issues.filter(i=>canon(i.source)===canon(sourceId)||[...selected.values()].some(e=>e.kind===i.category&&canon(e.record.name)===canon(i.name)&&canon(e.record.source)===canon(i.source))).map(i => [JSON.stringify(i), i])).values()],
+    dependencyReasons:[...selected.values()].filter(e=>e.record._bccDependency).map(e=>({kind:e.kind,name:e.record.name,source:e.record.source,reasons:e.record._bccDependencyReasons})),
     dependencies: Object.fromEntries(KINDS.map(k => [k, records[k].filter(r => r._bccDependency).length])),
     counts: Object.fromEntries(KINDS.map(k => [k, records[k].length]))};
 }

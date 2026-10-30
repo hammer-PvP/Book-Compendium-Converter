@@ -17,3 +17,5 @@
 .bcc-sidebar-shortcut {display:flex;flex:0 0 auto;padding:6px 8px;align-items:center;justify-content:stretch;}
 .bcc-sidebar-shortcut .bcc-sidebar-open {width:100%;min-height:32px;display:flex;gap:8px;justify-content:center;align-items:center;cursor:pointer;font-size:12px;font-weight:600;line-height:1.2;white-space:normal;}
 .bcc-sidebar-shortcut .bcc-sidebar-open i {flex:0 0 auto;}
+
+.bcc-progress{display:grid;gap:8px;padding:12px;border:1px solid #987e4d;border-radius:6px}.bcc-progress progress{width:100%;height:18px;accent-color:#987e4d}.bcc-progress label{font-weight:700}.bcc-count{font-size:.83rem}.bcc-progress button{justify-self:end;min-width:90px}

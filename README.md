@@ -1,4 +1,4 @@
-# Book Compendium Converter — 0.0.6 experimental
+# Book Compendium Converter — 0.0.7 experimental
 
 An offline book importer targeting **Foundry VTT 14.369 / D&D5e 6.0.6**.
 This build expands native world-compendium generation. **Foundry and Character
@@ -52,12 +52,52 @@ also resolved to actual source Item records when available.
 | Update unchanged BCC | Updates BCC documents whose saved fingerprint still matches. Preserves local edits and older documents without fingerprints. |
 | Rebuild this book's BCC documents | Replaces matching BCC documents, including manual edits, while retaining their IDs. Refuses unrelated documents. Requires confirmation in the importer. |
 
-For comparison with 0.0.5, use a **fresh test world**. Rebuild updates documents
+For comparison with older versions, use a **fresh test world**. Rebuild updates documents
 in the current conversion graph; it does not delete obsolete documents left by
 older conversions. Reload the world after rebuilding to refresh native spell
 list contributions.
 
-## 0.0.6 scope
+## 0.0.7 changes
+
+- Ordinary class spells and cantrips no longer create a second ItemChoice
+  queue, regardless of whether Character Builder is enabled during import.
+  Native progression, scales and registered lists supply the class data.
+  Genuine species, feature, invocation and additional-spell choices remain.
+- Explicit initial cantrip grants followed by a long-rest replacement rule
+  retain the fixed grant. Replacement timing and filter are saved as metadata;
+  this release does not add a replacement UI or automate the later rest choice.
+- Open selectors stay within the selected publication and required parent-class
+  catalogs. Named mechanical dependencies can cross publications, with reasons
+  in the report. Narrative references and reading copy bases do not import an
+  entire catalog. Supplemental classes without local spells use one compatible
+  base catalog from their declared class-list membership.
+- Scale Values are consolidated by effective identifier and primary/multiclass
+  domain; native supplements override inferred values in their own domain.
+- Registered system ActiveEffect change types are preserved. Missing effect or
+  rider definitions are reported explicitly and never replaced by invented IDs.
+- Starting equipment supports multiple equipment categories and resolvable
+  special item labels. Property-filtered weapon proficiencies become native
+  trait grants/choices.
+- Import progress includes percentage, phase and counts. Completion and its OK
+  button follow actual writes, index/page checks and saved import settings.
+  Native preparation warnings are included in the report; deferred resource
+  bindings are listed as information rather than missing mechanics.
+- Class/subclass spell lists are pages in one **Spell Lists** Journal inside
+  **Book & Chapters**, without an additional sidebar pack.
+- A GM can right-click any World compendium and choose **Excluir tudo**.
+  The confirmation identifies the pack and document count, and requires the
+  content-deletion checkbox. It deletes that pack and its contents using the
+  native API; module/system packs are blocked. Existing copies on actors or in
+  world directories remain.
+
+Updating the module does not rewrite imported documents or existing actors.
+Re-import to apply fixes. Rebuild retains IDs but does not prune obsolete data.
+For a clean comparison, use a fresh test world, or explicitly delete the old
+World packs before importing again. Old standalone Spell Lists packs are not
+silently deleted; their BCC registrations are superseded on re-import. Reload
+Foundry afterward to refresh the native registry and reselect CB source packs.
+
+## Existing conversion coverage
 
 - **Source preparation:** context-aware copies, supported modification modes,
   templates, variants, subraces, native supplements and dependency traversal.
@@ -70,9 +110,9 @@ list contributions.
   currency and linked items; primary and multiclass proficiency distinctions;
   source-derived ASI advancements, progression scales and spell lists.
 - **Selection:** source level prerequisites, bounded spell selectors and
-  progression-based casting tiers. When Character Builder is active, class
-  spell progression is supplied through native scales/lists instead of a
-  second BCC spell-choice queue.
+  source spell metadata. Ordinary class
+  spell progression is supplied through native scales/lists; creation and
+  selection workflows belong to the native system and its consumers.
 - **Equipment:** weapons, armor, tools, consumables and containers, including
   basic damage, attacks, mastery, properties, charges and supported recovery.
   Structured item spell recipes can generate linked native Cast activities
@@ -105,6 +145,12 @@ Development checks exercise source contracts, document blueprints, dependency
 graphs and a mocked persistence transport. They do **not** execute Foundry's
 native DataModels, Character Builder workflows, combat rolls or rest recovery.
 The importer performs native schema preflight when run inside Foundry.
+For 0.0.7, static generation covered XPHB, Eberron: Forge of the Artificer,
+Arcana Unleashed and Tasha's Cauldron of Everything. Regression checks also
+covered Goliath ancestry, later species grants, Blight, equipment, NPC embedded
+features, cross-book scope, class-domain scales, deletion guards, preparation
+warnings and persistence/progress ordering. These checks are not live Foundry
+or Character Builder certification.
 
 ## Known limits
 
