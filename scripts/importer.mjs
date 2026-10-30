@@ -1,3 +1,6 @@
+import {organizeDocuments} from "./organization.mjs";
+import {contentHash, auditReferences} from "./integrity.mjs";
+import {saveSpellLists} from "./spell-lists.mjs";
 import {buildIndex, convertOne, createReport, finalizeReport, PACK_DEFS} from "./converter.mjs";
 
 // Use the game-system document classes, not Foundry core globals.
@@ -26,7 +29,7 @@ async function getPack(index,kind,folder,content){
   if(!pack){
     pack=await foundry.documents.collections.CompendiumCollection.createCompendium({
       name:meta.packName,label:meta.label,type:meta.docType,system:meta.docType==="Item"||meta.docType==="Actor"?"dnd5e":undefined,
-      package:"world",flags:{bcc:{sourceId:content.sourceId,category:kind}}
+      package:meta.package,flags:{bcc:{sourceId:content.sourceId,category:kind}}
     });
   }
   if(pack.documentName!==meta.docType)throw new Error(`Pacote ${meta.packId} tem tipo incompatível: ${pack.documentName}`);
@@ -59,6 +62,7 @@ async function writeOne(cls,pack,doc,kind,report){
     try{
       const saved=await cls.create(doc,{pack:pack.collection,keepId:true});
       if(!saved)throw new Error("The server returned no document");
+      await stamp(cls,pack,[saved]);
       report.created[kind]=(report.created[kind]||0)+1;
       return;
     }catch(error){
@@ -76,20 +80,46 @@ async function writeOne(cls,pack,doc,kind,report){
     }
   }
 }
-async function createBatch(pack,docs,kind,report){
+async function stamp(cls,pack,documents){
+  if(!documents.length)return;
+  const updates=[];for(const document of documents)updates.push({_id:document.id??document._id,"flags.bcc.contentHash":await contentHash(document)});
+  await cls.updateDocuments(updates,{pack:pack.collection});
+}
+async function createBatch(pack,docs,kind,report,options){
   const cls=getDocumentClass(pack.documentName);
   const initialIds=new Set((await pack.getIndex()).map(it=>it._id));
-  const fresh=[];
+  const fresh=[],updates=[];
+  const current=initialIds.size&&options.mode!=="create"?new Map((await pack.getDocuments()).map(d=>[d.id,d])):new Map();
   for(const doc of docs){
     if(initialIds.has(doc._id)){
-      report.existing[kind]=(report.existing[kind]||0)+1;
+      const existing=current.get(doc._id);
+      if(options.mode==="create"){
+        report.existing[kind]=(report.existing[kind]||0)+1;
+        report.incomplete.add(`${doc.name}: existing document skipped; its mechanics were not regenerated`);continue;
+      }
+      if(existing?.flags?.bcc?.sourceId!==report.sourceId){recordFailure(report,kind,doc,new Error("Existing document is not owned by this BCC import"),"update ownership");continue;}
+      if(options.mode!=="rebuild"&&(!existing.flags.bcc.contentHash||existing.flags.bcc.contentHash!==await contentHash(existing))){
+        report.existing[kind]=(report.existing[kind]||0)+1;report.preserved=(report.preserved??0)+1;
+        report.incomplete.add(`${doc.name}: prior-version or locally modified document preserved`);continue;
+      }
+      if(preflight(cls,doc,pack,kind,report))updates.push({...doc,flags:{...existing.toObject().flags,...doc.flags}});
       continue;
     }
     if(preflight(cls,doc,pack,kind,report))fresh.push(doc);
   }
+  for(const batch of batches(updates,25)){
+    try{
+      const saved=await cls.updateDocuments(batch,{pack:pack.collection,diff:false,recursive:false});
+      const savedIds=new Set((saved??[]).filter(Boolean).map(d=>d.id??d._id));
+      report.updated[kind]=(report.updated[kind]??0)+savedIds.size;await stamp(cls,pack,saved??[]);
+      for(const doc of batch)if(!savedIds.has(doc._id))recordFailure(report,kind,doc,new Error("Server did not confirm the updated document"),"verify update");
+    }
+    catch(error){for(const doc of batch)recordFailure(report,kind,doc,error,"update");}
+  }
   for(const batch of batches(fresh,25)){
     try{
       const results=await cls.createDocuments(batch,{pack:pack.collection,keepId:true});
+      await stamp(cls,pack,results??[]);
       const savedIds=new Set((results??[]).filter(Boolean).map(x=>x.id??x._id));
       report.created[kind]=(report.created[kind]||0)+savedIds.size;
       if(savedIds.size!==batch.length){
@@ -114,7 +144,7 @@ async function createBatch(pack,docs,kind,report){
   }
 }
 
-export async function importBook(content, onProgress=()=>{}){
+export async function importBook(content, onProgress=()=>{}, options={mode:"create"}){
   if(!game.user.isGM)throw new Error("A importação requer usuário GM.");
   if(game.system.id!=="dnd5e")throw new Error("A versão inicial requer o sistema dnd5e.");
   const index=await buildIndex(content);
@@ -125,7 +155,7 @@ export async function importBook(content, onProgress=()=>{}){
   const total=index.all.length;
   // Persist target Actors and Spells before Activities that reference them.
   const order=["monster","object","vehicle","spell","item","raceFeature","classFeature",
-    "subclassFeature","optionalfeature","feat","race","background","subclass","class","chapter"];
+    "subclassFeature","optionalfeature","feat","race","background","subclass","class","spellList","chapter"];
   for(const kind of order){
     const entries=index.all.filter(entry=>entry.kind===kind);
     if(!entries.length)continue;
@@ -137,11 +167,14 @@ export async function importBook(content, onProgress=()=>{}){
       catch(e){report.errors.push(`${kind} / ${entry.record.name}: conversão — ${e.message}`);}
       processed++;
     }
+    auditReferences(docs,index,report);
+    await organizeDocuments(pack,docs,entries,index);
     onProgress(`${LABELS[kind]}: gravando ${docs.length} documentos...`);
-    await createBatch(pack,docs,kind,report);
+    await createBatch(pack,docs,kind,report,options);
   }
+  await saveSpellLists(index.all.filter(e=>!report.validationFailures.some(f=>f.id===e._id)));
   report.countDocuments=index.all.length;
-  report.persistedTotal=Object.values(report.created).reduce((a,b)=>a+b,0)+
+  report.persistedTotal=Object.values(report.created).reduce((a,b)=>a+b,0)+Object.values(report.updated).reduce((a,b)=>a+b,0)+
     Object.values(report.existing).reduce((a,b)=>a+b,0);
   report.failedCount=report.validationFailures.length;
   report.status=report.errors.length?"failed":(report.unresolved.size||report.incomplete.size?"incomplete":"complete");
