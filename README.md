@@ -126,9 +126,11 @@ The importer performs native schema preflight when run inside Foundry.
 
 ## Development and distribution
 
-Every version requires a discussed and approved scope before implementation
-and publication. The current development scope is broader world import;
-exporting a selected folder and its dependencies is deferred.
+Every version requires a discussed and approved scope before implementation.
+Once an approved version is prepared, publish its source and GitHub release
+automatically so it can be installed through Foundry for testing. Publication
+does not establish end-to-end validation. The current development scope is
+broader world import; exporting a selected folder and its dependencies is deferred.
 
 Public source and release ZIPs must exclude official content, Plutonium,
 5etools, test files, fixtures and QA data. Release archives contain only
