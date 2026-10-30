@@ -1,0 +1,38 @@
+{
+  "id": "book-compendium-converter",
+  "title": "Book Compendium Converter",
+  "description": "Experimental offline 5etools to native D&D5e compendiums, with deterministic spell activity generation and mechanical QA.",
+  "version": "0.0.5",
+  "authors": [
+    {
+      "name": "hammer-PvP & OpenAI"
+    }
+  ],
+  "compatibility": {
+    "minimum": "14.369",
+    "verified": "14.369"
+  },
+  "relationships": {
+    "systems": [
+      {
+        "id": "dnd5e",
+        "type": "system",
+        "compatibility": {
+          "minimum": "6.0.6"
+        }
+      }
+    ]
+  },
+  "esmodules": [
+    "scripts/main.mjs"
+  ],
+  "styles": [
+    "styles/bcc.css"
+  ],
+  "languages": [],
+  "packs": [],
+  "license": "MIT",
+  "url": "https://github.com/hammer-PvP/Book-Compendium-Converter",
+  "manifest": "https://github.com/hammer-PvP/Book-Compendium-Converter/releases/latest/download/module.json",
+  "download": "https://github.com/hammer-PvP/Book-Compendium-Converter/releases/latest/download/book-compendium-converter.zip"
+}

@@ -1,0 +1,14 @@
+# Build outputs and local testing artifacts
+/dist/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+node_modules/
+coverage/
+# Never commit user-supplied libraries, proprietary books, or exported characters
+/5etools/
+/data/
+/packs/
+/assets/
+/tests/fixtures/private/
