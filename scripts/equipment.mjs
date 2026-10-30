@@ -3,6 +3,13 @@ import {nativeKey} from "./native-keys.mjs";
 const DAMAGE = {A:"acid",B:"bludgeoning",C:"cold",F:"fire",O:"force",L:"lightning",N:"necrotic",P:"piercing",I:"poison",Y:"psychic",R:"radiant",S:"slashing",T:"thunder"};
 const PROPERTIES = {A:"amm",AF:"fir",BF:"brst",F:"fin",H:"hvy",L:"lgt",LD:"lod",R:"rch",RLD:"rel",S:"spc",T:"thr",V:"ver","2H":"two"};
 const EQUIPMENT_CATEGORIES = {weaponSimple:["weapon","sim"],weaponMartial:["weapon","mar"],weaponSimpleMelee:["weapon","simpleM"],weaponMartialMelee:["weapon","martialM"],toolArtisan:["tool","art"],setGaming:["tool","game"],instrumentMusical:["tool","music"],focusSpellcastingArcane:["focus","arcane"],focusSpellcastingHoly:["focus","holy"],focusSpellcastingDruidic:["focus","druidic"]};
+export function specialEquipmentReference(text,records,owner){
+  const tagged=/\{@item\s+([^}]+)\}/i.exec(text);if(tagged)return tagged[1];
+  const name=lc(plainText(text)),matches=records.filter(r=>lc(r.name)===name&&!r._bccIsGroup);
+  const local=matches.filter(r=>lc(r.source)===lc(owner.source));
+  const pool=local.length?local:matches;
+  return pool.length===1?`${pool[0].name}|${pool[0].source}`:null;
+}
 /** Source catalog membership for starting-equipment choices. No external item fallback. */
 export function equipmentCategoryPool(records, category, owner) {
   const native=EQUIPMENT_CATEGORIES[category];if(!native)return [];
@@ -100,6 +107,8 @@ export function buildStartingEquipment(record, index, lookup, report) {
   function unit(raw, group) {
     const value = typeof raw === "string" ? {item:raw} : raw;
     if (!value) return;
+    if(value.equipmentTypes){const choice=add("OR",group);for(const type of value.equipmentTypes)unit({equipmentType:type,quantity:value.quantity},choice);return;}
+    if(value.special){const uid=specialEquipmentReference(value.special,index.all.filter(e=>e.kind==="item").map(e=>e.record),record);if(uid){unit({...value,special:undefined,item:uid},group);return;}}
     if (value.value != null) {add("currency",group,"gp",Number(value.value)/100);return;}
     if (value.item) {
       const ref = lookup(index,"item",value.item,record.source);

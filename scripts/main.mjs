@@ -1,3 +1,4 @@
+import {registerCompendiumDeletion} from "./compendium-delete.mjs";
 import {registerSpellLists} from "./spell-lists.mjs";
 import {registerResourceBindings} from "./resource-bindings.mjs";
 import {BCCApp} from "./app.mjs";
@@ -14,16 +15,17 @@ Hooks.once("init",()=>{
 Hooks.once("ready",()=>{
   setTimeout(()=>registerSpellLists(),0);
   if(!game.user.isGM)return;
+  registerCompendiumDeletion();
   game.bcc={
     open:async()=>{
       if(!app)app=new BCCApp();
       if(app.rendered){app.bringToFront();return app;}
       await app.load();await app.render(true);return app;
     },
-    getBooks,readBook,version:"0.0.6"
+    getBooks,readBook,version:"0.0.7"
   };
   // The sidebar may already be rendered before the ready hook.
   injectBCCShortcut(null,ui.compendium?.element);
-  console.info("BCC 0.0.6 | Ready. Acesse pelo botão na aba Compêndios ou game.bcc.open()");
+  console.info("BCC 0.0.7 | Ready. Acesse pelo botão na aba Compêndios ou game.bcc.open()");
 });
 Hooks.on("renderCompendiumDirectory",injectBCCShortcut);

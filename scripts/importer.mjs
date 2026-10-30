@@ -44,6 +44,12 @@ function recordFailure(report,kind,doc,error,phase){
   report.validationFailures.push(issue);
   report.errors.push(`${kind} / ${doc.name} [${doc._id}]: ${phase} — ${issue.message}`);
 }
+function preparationWarnings(document,kind,report){
+  for(const doc of [document,...(document.items??[])])for(const warning of doc._preparationWarnings??[]){
+    const issue={category:kind,name:doc.name,type:warning.type??"warning",message:String(warning.message??warning),link:warning.link??""};
+    if(!report.preparationWarnings.some(x=>JSON.stringify(x)===JSON.stringify(issue))){report.preparationWarnings.push(issue);report.incomplete.add(`${doc.name}: native preparation ${issue.type} — ${issue.message}`);}
+  }
+}
 function preflight(cls,doc,pack,kind,report){
   try{
     // Constructing a client document does not persist it; this also validates nested dnd5e Activities.
@@ -54,6 +60,7 @@ function preflight(cls,doc,pack,kind,report){
       throw new Error("Actor5e inválido no preflight: getCRExp indisponível");
     if(typeof test.validate==="function" && test.validate({strict:true})===false)
       throw new Error("A validação estrita retornou false");
+    preparationWarnings(test,kind,report);
     return true;
   }catch(error){recordFailure(report,kind,doc,error,"schema preflight");return false;}
 }
@@ -85,7 +92,7 @@ async function stamp(cls,pack,documents){
   const updates=[];for(const document of documents)updates.push({_id:document.id??document._id,"flags.bcc.contentHash":await contentHash(document)});
   await cls.updateDocuments(updates,{pack:pack.collection});
 }
-async function createBatch(pack,docs,kind,report,options){
+async function createBatch(pack,docs,kind,report,options,onBatch=()=>{}){
   const cls=getDocumentClass(pack.documentName);
   const initialIds=new Set((await pack.getIndex()).map(it=>it._id));
   const fresh=[],updates=[];
@@ -107,6 +114,7 @@ async function createBatch(pack,docs,kind,report,options){
     }
     if(preflight(cls,doc,pack,kind,report))fresh.push(doc);
   }
+  let handled=docs.length-fresh.length-updates.length;onBatch(handled);
   for(const batch of batches(updates,25)){
     try{
       const saved=await cls.updateDocuments(batch,{pack:pack.collection,diff:false,recursive:false});
@@ -115,6 +123,7 @@ async function createBatch(pack,docs,kind,report,options){
       for(const doc of batch)if(!savedIds.has(doc._id))recordFailure(report,kind,doc,new Error("Server did not confirm the updated document"),"verify update");
     }
     catch(error){for(const doc of batch)recordFailure(report,kind,doc,error,"update");}
+    handled+=batch.length;onBatch(handled);await pause(0);
   }
   for(const batch of batches(fresh,25)){
     try{
@@ -134,6 +143,7 @@ async function createBatch(pack,docs,kind,report,options){
         await writeOne(cls,pack,doc,kind,report);
       }
     }
+    handled+=batch.length;onBatch(handled);await pause(0);
   }
   // Query the actual persisted index, not the number of attempted creates.
   const persisted=new Set((await pack.getIndex()).map(it=>it._id));
@@ -151,28 +161,41 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
   const report=createReport(content);
   const folder=await getFolder(content.book);
   report.folderId=folder.id;
-  let processed=0;
+  let processed=0,completed=0;
   const total=index.all.length;
+  const progress=(phase,count,message)=>onProgress(message,{phase,completed:count,total,percent:Math.min(99,Math.floor((processed+completed)/(Math.max(1,total)*2+1)*100))});
   // Persist target Actors and Spells before Activities that reference them.
   const order=["monster","object","vehicle","spell","item","raceFeature","classFeature",
     "subclassFeature","optionalfeature","feat","race","background","subclass","class","spellList","chapter"];
   for(const kind of order){
     const entries=index.all.filter(entry=>entry.kind===kind);
     if(!entries.length)continue;
-    onProgress(`${LABELS[kind]}: preparando ${entries.length} documentos (${processed}/${total})...`);
+    progress("convert",completed,`${LABELS[kind]}: preparando ${entries.length} documentos...`);
     const pack=await getPack(index,kind,folder,content);
     const docs=[];
     for (const entry of entries){
       try{ docs.push(await convertOne(entry,index,content,report)); }
       catch(e){report.errors.push(`${kind} / ${entry.record.name}: conversão — ${e.message}`);}
-      processed++;
+      processed++;if(processed%20===0){progress("convert",completed,`${LABELS[kind]}: convertendo ${processed}/${total}...`);await pause(0);}
     }
     auditReferences(docs,index,report);
     await organizeDocuments(pack,docs,entries,index);
-    onProgress(`${LABELS[kind]}: gravando ${docs.length} documentos...`);
-    await createBatch(pack,docs,kind,report,options);
+    progress("write",completed,`${LABELS[kind]}: gravando e conferindo ${docs.length} documentos...`);
+    const before=completed;
+    await createBatch(pack,docs,kind,report,options,count=>{completed=before+count;progress("write",completed,`${LABELS[kind]}: ${completed}/${total} documentos processados...`);});
+    completed=before+entries.length;
   }
-  await saveSpellLists(index.all.filter(e=>!report.validationFailures.some(f=>f.id===e._id)));
+  progress("verify",completed,"Conferindo listas de magias e finalizando relatório...");
+  const verifiedLists=[];
+  for(const entry of index.all.filter(e=>e.kind==="spellList")){
+    if(report.validationFailures.some(f=>f.id===entry._id))continue;
+    const pack=game.packs.get(entry.packId),saved=await pack?.getDocument(entry._id);
+    const pages=saved?.pages?.contents??saved?.pages??[];
+    if(entry.record.lists.every(page=>[...pages].some(p=>(p.id??p._id)===page.pageId&&p.type==="spells")))verifiedLists.push(entry);
+    else recordFailure(report,"spellList",{name:entry.record.name,_id:entry._id},new Error("Native spell-list pages were not confirmed after write"),"verify pages");
+  }
+  for(const issue of await saveSpellLists(verifiedLists))report.incomplete.add(`Spell-list registration ${issue.uuid}: ${issue.message}`);
+  if(options.mode!=="create")report.information.add("Reload Foundry after rebuilding to refresh the native spell-list registry. Obsolete packs and documents are not automatically removed.");
   report.countDocuments=index.all.length;
   report.persistedTotal=Object.values(report.created).reduce((a,b)=>a+b,0)+Object.values(report.updated).reduce((a,b)=>a+b,0)+
     Object.values(report.existing).reduce((a,b)=>a+b,0);
@@ -182,6 +205,6 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
   const audit={sourceId:content.sourceId,bookName:content.book.name,compendiumFolder:folder.id,
     countByType:output.created,importedAt:output.generatedAt};
   await game.settings.set("book-compendium-converter","lastImport",audit);
-  onProgress(`${output.status==="failed"?"Importação com falhas":"Gravação concluída"}: ${output.persistedTotal}/${output.countDocuments} documentos presentes, ${output.errors.length} erros, ${output.unresolved.length} vínculos pendentes. Ainda não homologado para Character Builder.`);
+  onProgress(`${output.status==="failed"?"Importação com falhas":"Gravação concluída"}: ${output.persistedTotal}/${output.countDocuments} documentos presentes, ${output.errors.length} erros, ${output.unresolved.length} vínculos pendentes. Ainda não homologado para Character Builder.`,{phase:"done",completed:total,total,percent:100});
   return output;
 }

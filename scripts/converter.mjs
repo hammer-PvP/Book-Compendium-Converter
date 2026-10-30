@@ -1,6 +1,7 @@
 import {buildActor} from "./actors.mjs";
 import {prepareNativeKeys} from "./native-keys.mjs";
 import {addItemSpellActivities} from "./item-spells.mjs";
+import {upsertScaleValue,consolidateScaleValues} from "./advancements.mjs";
 import {applyNativeTraits} from "./traits.mjs";
 import {addSpellRecipes, expandedSpellPool, preferredCandidates} from "./additional-spells.mjs";
 import {packAddress, WORLD_DESTINATION} from "./destination.mjs";
@@ -26,7 +27,7 @@ const PACK_DEFS = {
   monster: ["actors", "Actors & Monsters", "Actor", "npc"],
   object: ["objects", "Objects", "Actor", "npc"],
   vehicle: ["vehicles", "Vehicles", "Actor", "vehicle"],
-  spellList: ["spell-lists", "Spell Lists", "JournalEntry", ""],
+  spellList: ["book", "Book & Chapters", "JournalEntry", ""],
   chapter: ["book", "Book & Chapters", "JournalEntry", ""]
 };
 const ABILITIES = ["str", "dex", "con", "int", "wis", "cha"];
@@ -68,9 +69,12 @@ export async function buildIndex(content, destination = WORLD_DESTINATION) {
   const graph = speciesGraph(content.records.race);
   const extraOptions=[];
   const records = {...content.records, race:graph.races.map(clone), raceFeature: graph.features,
-    spellList:[...content.records.class.map(r=>({r,type:"class"})),...content.records.subclass.filter(r=>r.casterProgression||r.additionalSpells?.some(b=>b.expanded)).map(r=>({r,type:"subclass"}))].filter(({r})=>r.casterProgression||r.additionalSpells?.some(b=>b.expanded)).map(({r,type})=>({name:`${r.name} Spell List (${r.source})`,source:r.source,className:r.className??r.name,classSource:r.classSource??r.source,ownerName:r.name,listType:type,additionalSpells:clone(r.additionalSpells??[]),_bccDependency:r._bccDependency})),
+    spellList:[],
     chapter: content.chapters.map((entry, i) => ({name: entry.name || `Section ${i + 1}`, source:content.sourceId,
       page: entry.page, entries: entry.entries, chapter: entry, sequence:i}))};
+  const lists=[];
+  for(const [kind,rows] of [["class",records.class],["subclass",records.subclass]])for(const r of rows)if(r.casterProgression||r.additionalSpells?.some(b=>b.expanded))lists.push({pageId:await idFor(`spell-list:${entityKey(kind,r)}`),name:r.name,source:r.source,_bccRules:r._bccRules,identifier:r.foundryIdentifier??findSupplement(kind,r,content.foundry)?.identifier??slug(r.name),className:r.className??r.name,classSource:r.classSource??r.source,ownerName:r.name,listType:kind,additionalSpells:clone(r.additionalSpells??[])});
+  if(lists.length)records.spellList.push({name:"Spell Lists",source:content.sourceId,lists});
   for(const [kind,rows] of Object.entries(records))if(kind!=="spellList")for(const record of rows){
     if((record.additionalSpells?.length??0)>1){
       record._bccAdditionalOptions=record.additionalSpells.map((block,i)=>`${record.name}: ${block.name??`Spellcasting Option ${i+1}`}`);
@@ -181,8 +185,11 @@ function renderEntries(entries,index,source,report, depth=0){
 function advancement(type,name,level,configuration,value={}){
   return {type,name,level,configuration,value};
 }
-function addAdv(advances,obj){const key=obj._id || `a${Object.keys(advances).length.toString().padStart(15,"0")}`;
- advances[key] = {...obj, _id:key};}
+function addAdv(advances,obj){
+ let sequence=Object.keys(advances).length,key=obj._id;
+ if(!key){do{key=`a${String(sequence++).padStart(15,"0")}`;}while(advances[key]);}
+ advances[key] = {...obj, _id:key};
+}
 function sourceMeta(rec) {const rules=rec._bccRules??(rec.edition==="one"||rec.srd52||rec.basicRules2024?"2024":rec.edition==="classic"||rec.srd||rec.basicRules?"2014":null);return {book:rec.source??"",page:String(rec.page??""),...(rules?{rules}:{}),custom:"",license:""};}
 function applySystemFields(system, fields) {
   for(const [path,value] of Object.entries(fields)) {
@@ -356,17 +363,8 @@ function applyClassChoices(record,index,adv,report){
       itemChoiceConfig(pool,choices,"feat",{type:"feat",subtype:"",level:"",list:[],school:[]}),
       {kind:"featProgression",source:record.source,step:pi,category:step.category}));
   }
-  if(globalThis.game?.modules?.get("dnd5e-character-builder")?.active)return;
-  const pool=spellRefsForClass(index,record.name,record.source);
-  const specs=[{values:record.cantripProgression,cantrip:true,name:"Choose Cantrips"},{values:record.preparedSpellsProgression??record.spellsKnownProgression,cantrip:false,name:"Choose Spells"}];
-  for(const spec of specs){let previous=0;for(const [i,value] of (spec.values??[]).entries()){
-    const level=i+1,count=Math.max(0,Number(value)-previous);previous=Number(value);if(!count)continue;
-    const progression=record.casterProgression;
-    const maximum=progression==="pact"?Math.min(5,Math.ceil(level/2)):progression==="1/2"||progression==="artificer"?Math.min(5,Math.ceil(level/4)):progression==="1/3"?Math.min(4,Math.ceil(level/6)):Math.min(9,Math.ceil(level/2));
-    const candidates=pool.filter(e=>spec.cantrip?Number(e.record.level)===0:Number(e.record.level)>0&&Number(e.record.level)<=maximum);
-    const config=itemChoiceConfig(candidates,{[level]:{count,replacement:false}},"spell",{type:"",subtype:"",level:spec.cantrip?"0":"",list:[],school:[]},{ability:record.spellcastingAbility?[record.spellcastingAbility]:[],method:record.casterProgression==="pact"?"pact":"spell",uses:{max:"",per:"",requireSlot:false},prepared:1});
-    addAdv(adv,choiceAdv(`${spec.name} (Level ${level})`,level,config,{kind:"spellProgression"}));
-  }}
+  // Ordinary class spell progression is data, not an additional Advancement
+  // selection queue. Consumers read the native scales and registered lists.
 }
 // Interpret the general 5etools additionalSpells `choose` recipe format. No
 // feat or class name is used to select a special conversion path.
@@ -401,7 +399,8 @@ function normalizeEffects(arr,kind,record,report){
         typeof c.mode==="string"?c.mode.toLowerCase():OLD_EFFECT_MODES[c.mode];
       delete c.mode;
       c.key=String(c.key??"").replace(/system\.attributes\.movement\.(walk|fly|swim|climb|burrow)$/, "system.attributes.movement.speeds.$1");
-      if(Object.values(OLD_EFFECT_MODES).includes(type))c.type=type;
+      const registered=Object.keys(globalThis.CONFIG?.ActiveEffect?.changeTypes??{}).find(key=>canon(key)===canon(type));
+      if(registered||Object.values(OLD_EFFECT_MODES).includes(type))c.type=registered??type;
       else {report.incomplete.add(`${record.name}: unsupported ActiveEffect change type ${String(change.type??change.mode)} withheld`);return null;}
       return c;
     }).filter(Boolean);
@@ -450,7 +449,7 @@ function normalizeActivities(arr,effects,index,record,report){
       if(ref)reference.uuid=ref.uuid;
       (record._bccResourceBindings??=[]).push({activity:_id,index:ti,reference});
       target.target=ref?.uuid??`bcc-unresolved:${reference.name??"resource"}`;
-      report.incomplete.add(`${context}: native resource target will bind when granted to an Actor`);
+      report.information.add(`${context}: native resource target will bind when granted to an Actor`);
     }
     if(normalized.activity?.foundryId){const id=idByFoundryId.get(normalized.activity.foundryId);if(id)normalized.activity={id};else{report.unresolved.add(`${context}: unresolved forwarded activity ${normalized.activity.foundryId}`);continue;}}
     if(a.type==="transform"&&Array.isArray(normalized.profiles))for(const profile of normalized.profiles)if(profile.uuid)profile.uuid=resolveOverlayUUID(profile.uuid,index,"monster",report,context)??"";
@@ -529,15 +528,19 @@ export async function convertOne(entry,index,content,report){
   const {kind,record,_id} = entry;
   const desc=renderEntries(record.entries??[],index,record.source,report);
   const base={_id,name:record.name,sort:kind==="chapter" ? Number(record.sequence??0)*10000 : 0,flags:originFlags(kind,record,content.sourceId)};
-  base.flags.bcc.converterVersion="0.0.6";
+  base.flags.bcc.converterVersion="0.0.7";
   base.flags.bcc.dependency=!!record._bccDependency;
+  if(record._bccDependencyReasons?.length)base.flags.bcc.dependencyReasons=clone(record._bccDependencyReasons);
   if(record.prerequisite)base.flags.bcc.prerequisites=clone(record.prerequisite);
+  if(record._bccSpellReplacements)base.flags.bcc.spellReplacements=clone(record._bccSpellReplacements);
   if(kind==="chapter"){
     return {...base,pages:[{_id:"bccChapterPage01",name:record.name,type:"text",sort:0,text:{content:renderEntries(record.chapter,index,record.source,report)}}]};
   }
   if(kind==="spellList"){
-    const spells=record.listType==="subclass"?expandedSpellPool(record,index,spellRefsForClass,lookupUid,report):spellRefsForClass(index,record.ownerName??record.className,record.classSource);
-    return {...base,pages:[{_id:"bccSpellListPage",name:record.ownerName??record.className,type:"spells",system:{type:record.listType??"class",identifier:slug(record.ownerName??record.className),grouping:"level",description:{value:""},spells:spells.map(e=>e.uuid),unlinkedSpells:[]}}]};
+    return {...base,pages:record.lists.map(list=>{
+      const spells=list.listType==="subclass"?expandedSpellPool(list,index,spellRefsForClass,lookupUid,report):spellRefsForClass(index,list.ownerName,list.classSource);
+      return {_id:list.pageId,name:list.ownerName,type:"spells",system:{type:list.listType,identifier:list.identifier,grouping:"level",description:{value:""},spells:preferredCandidates(spells,list).map(e=>e.uuid),unlinkedSpells:[]}};
+    })};
   }
   if(["monster","object","vehicle"].includes(kind))return buildActor(entry,index,content,report,{convert:convertOne,lookup:lookupUid,render:renderEntries});
   const sys={description:{value:desc},source:sourceMeta(record),identifier:slug(record.name)};
@@ -630,7 +633,7 @@ export async function convertOne(entry,index,content,report){
     if(overlay.system)applySystemFields(sys,overlay.system);
     if(Array.isArray(overlay.advancement))for(const a of overlay.advancement) {
       // Native supplement can bring valid ScaleValue advancements.
-      if(a.type==="ScaleValue"&&!Object.values(adv).some(old=>old.configuration?.identifier&&old.configuration.identifier===a.configuration?.identifier))addAdv(adv,{...structuredClone(a),_id:`a${String(Object.keys(adv).length).padStart(15,"0")}`,level:0,value:{}});
+      if(a.type==="ScaleValue")upsertScaleValue(adv,a,addAdv,slug);
       else if(a.type!=="ScaleValue")report.incomplete.add(`${record.name}: supplemental ${a.type} advancement deferred`);
     }
     effects=normalizeEffects(overlay.effects,kind,record,report);
@@ -670,14 +673,15 @@ export async function convertOne(entry,index,content,report){
       if(candidates.length===1)addAdv(adv,{...clone(candidates[0]),_id:undefined,configuration:{...clone(candidates[0].configuration),identifier:name}});
     }
   }
+  consolidateScaleValues(adv,slug,report,record.name);
   if(Object.keys(adv).length)sys.advancement=adv;
   const documentType=overlay?.type??record.foundryType??(kind==="raceFeature"||["classFeature","subclassFeature","optionalfeature"].includes(kind)?"feat":
     kind==="item"?classifyItem(record):PACK_DEFS[kind][3]);
   if(kind==="spell" && !Object.keys(sys.activities??{}).length)report.incomplete.add(`${record.name}: spell has no native Activity`);
   return {...base,type:documentType,system:sys,...effects.length?{effects}:{} };
 }
-export function createReport(content){return {dependencies:content.dependencies??{},preparationIssues:content.preparationIssues??[],sourceId:content.sourceId,counts:{...content.counts},
+export function createReport(content){return {dependencyReasons:content.dependencyReasons??[],information:new Set(),preparationWarnings:[],dependencies:content.dependencies??{},preparationIssues:content.preparationIssues??[],sourceId:content.sourceId,counts:{...content.counts},
   created:{},updated:{},existing:{},errors:[],warnings:[],validationFailures:[],unresolved:new Set(),incomplete:new Set((content.preparationIssues??[]).map(i=>`${i.category} / ${i.name}: ${i.message}`)),unlocalizedImages:new Set()};}
-export function finalizeReport(report){return {...report,unresolved:[...report.unresolved],incomplete:[...report.incomplete],unlocalizedImages:[...report.unlocalizedImages],
+export function finalizeReport(report){return {...report,information:[...report.information],unresolved:[...report.unresolved],incomplete:[...report.incomplete],unlocalizedImages:[...report.unlocalizedImages],
   generatedAt:new Date().toISOString()};}
 export { PACK_DEFS };
