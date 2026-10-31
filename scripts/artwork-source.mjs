@@ -17,9 +17,19 @@ export async function loadArtwork(content){
   function images(kind,r,seen=new Set()){
     const key=artworkKey(kind,r);if(seen.has(key))return [];seen.add(key);
     if(r.images?.length)return clone(r.images);
-    if(r._copy){const parent=rows.find(e=>e.kind===kind&&canonical(e.record.name)===canonical(r._copy.name)&&canonical(e.record.source)===canonical(r._copy.source));if(parent)return images(kind,parent.record,seen);}
+    const ref=r._copy??r[`_${kind}Fluff`];
+    if(ref){const parent=rows.find(e=>e.kind===kind&&canonical(e.record.name)===canonical(ref.name)&&canonical(e.record.source)===canonical(ref.source));if(parent)return images(kind,parent.record,seen);}
     return [];
   }
   for(const {kind,record} of rows){const list=images(kind,record);if(list.length)output.set(artworkKey(kind,record),list);}
+  // Fluff records often omit class/race context present in the mechanical UID.
+  // Only use the short identity when all matches agree on their artwork.
+  const short=new Map();
+  for(const {kind,record} of rows){const list=images(kind,record);if(!list.length)continue;const key=artworkKey(kind,{name:record.name,source:record.source});if(!short.has(key))short.set(key,new Map());short.get(key).set(JSON.stringify(list),list);}
+  for(const [key,choices] of short)if(choices.size===1)output.set(key,[...choices.values()][0]);
+  for(const [kind,records] of Object.entries(content.records))for(const r of records){
+    const refs=[r,...[r._bccCopyOf,r._bccVariantOf,r.fluff?.[`_${kind}Fluff`]].filter(Boolean)];
+    for(const ref of refs){const list=output.get(artworkKey(kind,ref))??output.get(artworkKey(kind,{name:ref.name,source:ref.source}));if(list?.length){output.set(artworkKey(kind,r),list);break;}}
+  }
   return output;
 }

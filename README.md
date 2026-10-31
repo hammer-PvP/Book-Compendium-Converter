@@ -1,4 +1,4 @@
-# Book Compendium Converter — 0.0.9 experimental
+# Book Compendium Converter — 0.0.10 experimental
 
 A local book importer targeting **Foundry VTT 14.369 / D&D5e 6.0.6**.
 This build expands native world-compendium generation. **Foundry and Character
@@ -24,6 +24,7 @@ It does not require Plutonium, web services, AI inference, or online SRD lookups
 All conversion code is original to BCC. Native system enum labels may be read
 locally to match tool and weapon proficiency keys; their item mechanics are not
 used as conversion fallbacks.
+Source-folder colors are metadata from the 5etools source-color palette.
 
 The public release assets are named `module.json` and
 `book-compendium-converter.zip`. A development ZIP can be installed manually
@@ -37,7 +38,7 @@ published release.
 
 1. Open **Book Compendium Converter** at the top of the **Compendiums** sidebar.
    The console fallback is `game.bcc.open()`.
-2. Select a book and click **Analisar livro**. The preview includes local
+2. Search by book name or abbreviation, select the target rules, and click **Analisar livro**. The preview includes local
    dependencies needed by the selected publication.
 3. Choose the handling of existing documents, then click **Criar compêndios**.
 4. Download the JSON report. A successful write does not establish mechanical
@@ -58,6 +59,52 @@ For comparison with older versions, use a **fresh test world**. Rebuild updates 
 in the current conversion graph; it does not delete obsolete documents left by
 older conversions. Reload the world after rebuilding to refresh native spell
 list contributions.
+
+## 0.0.10 changes
+
+- Explicit, unconditional fixed AC bonuses on feature documents become native
+  transferable Active Effects. Existing source effects take precedence and
+  prevent duplicate bonuses. Conditional or activated AC benefits are not
+  converted into permanent bonuses; unsupported cases remain reported.
+- A supplemental class's own spells no longer suppress its core spell-list
+  dependencies. The supplied EFA Artificer graph now includes 80 linked spells,
+  including 17 cantrips and 14 first-level spells. The native `artificer`
+  progression is preserved; Character Builder's progression support is separate.
+- Object and vehicle cargo uses the native `tn` weight unit. Preflight observes
+  non-throwing native preparation errors as failures and releases its error
+  listener after each document. Effect durations use current value/unit fields.
+- Target rules can preserve all source variants or prefer 2014/2024 variants.
+  Compatibility copies are classified by their parent class rules. For 2024,
+  initial subclass choices, grants, spell choices and scales are delayed to
+  class level 3; later levels remain unchanged. This is subclass compatibility,
+  not a complete rewrite of every legacy base-class mechanic. Source provenance
+  remains recorded separately. Both source variants are labeled when retained.
+- Species variants which differ in one named feature and supported trait fields
+  become exclusive native feature choices on one species. Each option carries
+  its own proficiencies or sense effect. This includes Custom Lineage's
+  Darkvision versus Skill Proficiency without granting both benefits.
+- Artwork resolution supports short fluff identities, explicit fluff aliases
+  and declared copy ancestry. Actors can use their declared local token when
+  portrait art is absent. Embedded monster features prefer monster-feature
+  icon sources; optional features can inherit an unambiguous owning class's art.
+- Explicit summon stat-block references can supply native Actor profiles when
+  a source supplement has no profile. Summon scaling, commands and lifecycle
+  remain subject to live validation; no unspecified formulas are invented.
+- Books are searchable and alphabetized. Imported folders use source colors;
+  level folders use numeric ordering, including managed folders on reimport.
+  Dependency reasons remain included in the report for review.
+
+Validated offline generation across XPHB, EFA, AU and TCE, plus targeted effect,
+variant, spell-list, summon-reference, folder-order, error-capture and persistence
+regressions. These checks do not execute the native Foundry or Character Builder
+UI. The supplied PHB Witch Bolt effect reference and two Martial Arts activity
+riders still lack complete source definitions and remain reported. They are not
+filled from mechanically different versions.
+
+For a clean comparison, import into a fresh test world. Rebuild does not remove
+obsolete variants or dependencies already written by earlier versions. Existing
+characters are not automatically updated. The multi-book cleanup interface is
+deferred.
 
 ## 0.0.9 changes
 

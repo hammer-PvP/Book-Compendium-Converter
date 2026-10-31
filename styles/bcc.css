@@ -1,7 +1,7 @@
 #bcc-book-importer .window-content{overflow-y:auto;padding:0;}
 .bcc-ui{padding:16px;display:grid;gap:14px;color:var(--color-text-primary,#ddd);font-family:var(--font-primary,inherit)}
 .bcc-heading h2{margin:0 0 6px;font-size:1.45rem}.bcc-heading p{margin:0;font-size:.83rem;opacity:.8}
-.bcc-selector{display:grid;gap:8px}.bcc-selector label{font-weight:700}.bcc-selector select{width:100%;padding:6px}
+.bcc-selector{display:grid;gap:8px}.bcc-selector label{font-weight:700}.bcc-selector select,.bcc-selector input{width:100%;padding:6px}
 .bcc-actions{display:flex;flex-wrap:wrap;gap:10px}.bcc-actions button{min-width:170px;flex:1}
 .bcc-summary,.bcc-result{border:1px solid var(--color-border-light-tertiary,#666);border-radius:6px;padding:14px}
 .bcc-summary h3,.bcc-result h3{margin:0 0 6px}.bcc-summary p,.bcc-result p{margin:5px 0 10px}

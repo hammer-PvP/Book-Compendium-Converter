@@ -17,10 +17,16 @@ export function resolveIcon(catalog,kind,r,doc){
     +(id.rules&&e.system?.source?.rules===id.rules?8:0)
     +(id.source&&imageName(e.system?.source?.book)===imageName(id.source)?8:0)
     +(id.parents.some(p=>imageName(e.system?.requirements).includes(p))?4:0)
+    +(kind==="monsterFeature"&&(/monsterfeatures/.test(e.pack??"")||e.system?.type?.value==="monster")?12:0)
     +(e.type===id.type?2:0)+(e.priority??(e.via==="mapping"?1:4));
   candidates.sort((a,b)=>rank(b)-rank(a));
   const top=candidates.filter(e=>rank(e)===rank(candidates[0]??{}));
-  return {match:new Set(top.map(e=>e.img)).size===1?top[0]:null,ambiguous:top.length>0&&new Set(top.map(e=>e.img)).size>1?top:[]};
+  // For a single semantic owner (e.g. monster actions), equal-ranked native
+  // artwork may vary by publication. A stable provider order avoids losing all
+  // available icons while retaining the ambiguity in the report.
+  const ambiguous=top.length>0&&new Set(top.map(e=>e.img)).size>1?top:[];
+  const native=kind==="monsterFeature"?top.filter(e=>/monsterfeatures/.test(e.pack??"")||e.system?.type?.value==="monster").sort((a,b)=>(a.pack??a.img).localeCompare(b.pack??b.img)):[];
+  return {match:!ambiguous.length?top[0]??null:native[0]??null,ambiguous};
 }
 
 /** Byte positions must not change when a binary header contains invalid UTF-8. */

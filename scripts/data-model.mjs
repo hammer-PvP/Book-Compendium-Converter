@@ -183,6 +183,7 @@ export function prepareRecords(kind, records, issues, {templates=[]} = {}) {
         applyMods(out, ref._mod, issueFor(r));
       }
       delete out._copy;
+      out._bccCopyOf={name:ref.name,source:ref.source??r.source};
     }
     out=resolveVariables(out,out,issueFor(r));
     active.delete(r); cache.set(r, out); return out;

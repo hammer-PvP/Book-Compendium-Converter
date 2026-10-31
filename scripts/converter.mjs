@@ -1,4 +1,7 @@
 import {entitlementEffects} from "./grant-policy.mjs";
+import {addPassiveEffects} from "./passive-effects.mjs";
+import {applyRulesAdvancements} from "./rules-policy.mjs";
+import {addSummonProfiles} from "./summon-profiles.mjs";
 import {createdResourceLinks} from "./created-resources.mjs";
 import {addResourceSpellActivities} from "./resource-spells.mjs";
 import {buildActor} from "./actors.mjs";
@@ -402,6 +405,7 @@ function normalizeEffects(arr,kind,record,report){
         typeof c.mode==="string"?c.mode.toLowerCase():OLD_EFFECT_MODES[c.mode];
       delete c.mode;
       c.key=String(c.key??"").replace(/system\.attributes\.movement\.(walk|fly|swim|climb|burrow)$/, "system.attributes.movement.speeds.$1");
+      c.key=c.key.replace(/system\.attributes\.senses\.(darkvision|blindsight|tremorsense|truesight)$/, "system.attributes.senses.ranges.$1");
       const registered=Object.keys(globalThis.CONFIG?.ActiveEffect?.changeTypes??{}).find(key=>canon(key)===canon(type));
       if(registered||Object.values(OLD_EFFECT_MODES).includes(type))c.type=registered??type;
       else {report.incomplete.add(`${record.name}: unsupported ActiveEffect change type ${String(change.type??change.mode)} withheld`);return null;}
@@ -409,7 +413,7 @@ function normalizeEffects(arr,kind,record,report){
     }).filter(Boolean);
     out.push({_id:`eff${String(i+1).padStart(13,"0")}`,name:e.name??`${record.name} Effect ${i+1}`,
       ...(e.type?{type:e.type}:{}),description:e.description??safe(plainText(e.descriptionEntries??[])),disabled:e.disabled??false,
-      transfer:e.transfer??false,system:{...(e.system??{}),changes},duration:e.duration?.seconds!=null?{value:e.duration.seconds,units:"seconds"}:e.duration?.rounds!=null?{value:e.duration.rounds,units:"rounds"}:e.duration??{},
+      transfer:e.transfer??false,system:{...(e.system??{}),changes},duration:normalizeDuration(e.duration),
       statuses:e.statuses??[],...(e.showIcon!=null?{showIcon:e.showIcon}:{}),img:e.img??"icons/svg/aura.svg",flags:{...(e.flags??{}),bcc:{foundryId:e.foundryId??""}}});
   }
   for(const [i,raw] of (arr??[]).entries()){
@@ -418,6 +422,15 @@ function normalizeEffects(arr,kind,record,report){
     if(raw.enchantmentRiderParent){const parent=out.find(e=>e.flags.bcc.foundryId===raw.enchantmentRiderParent);if(parent){parent.flags.dnd5e??={};parent.flags.dnd5e.enchantment??={};parent.flags.dnd5e.enchantment.riders??={};(parent.flags.dnd5e.enchantment.riders.effect??=[]).push(effect._id);effect.flags.dnd5e={...(effect.flags.dnd5e??{}),rider:true};}else report.unresolved.add(`${record.name}: missing parent Enchantment ${raw.enchantmentRiderParent}`);}
   }
   return out;
+}
+function normalizeDuration(duration){
+  if(!duration)return {};
+  const own=key=>Object.getOwnPropertyDescriptor(duration,key)?.value;
+  if(own("value")!=null)return {value:own("value"),units:own("units")??"seconds"};
+  if(own("seconds")!=null)return {value:own("seconds"),units:"seconds"};
+  if(own("rounds")!=null)return {value:own("rounds"),units:"rounds"};
+  if(own("turns")!=null)return {value:own("turns"),units:"turns"};
+  return {};
 }
 function resolveOverlayUUID(value, index, expectedKind, report, context){
   if(typeof value!=="string"||!value.trim())return null;
@@ -542,7 +555,11 @@ export async function convertOne(entry,index,content,report){
   const {kind,_id} = entry,record=clone(entry.record);
   const desc=renderEntries(record.entries??[],index,record.source,report);
   const base={_id,name:record.name,sort:kind==="chapter" ? Number(record.sequence??0)*10000 : 0,flags:originFlags(kind,record,content.sourceId)};
-  base.flags.bcc.converterVersion="0.0.9";
+  if(kind==="subclass"&&(index.byShort.get(`${kind}|${canon(record.source)}|${canon(record.name)}`)?.length??0)>1)
+    base.name=`${record.name} (${record._bccRules??record.classSource})`;
+  base.flags.bcc.converterVersion="0.0.10";
+  base.flags.bcc.targetRules=content.targetRules??"source";
+  base.flags.bcc.sourceRules=record.edition??record._bccRules??null;
   base.flags.bcc.dependency=!!record._bccDependency;
   if(record._bccDependencyReasons?.length)base.flags.bcc.dependencyReasons=clone(record._bccDependencyReasons);
   if(record.prerequisite)base.flags.bcc.prerequisites=clone(record.prerequisite);
@@ -601,6 +618,7 @@ export async function convertOne(entry,index,content,report){
     if(kind==="class")for(const scale of resourceScales(record,index,slug))addAdv(adv,scale);
   } else if(kind==="feat"||kind==="optionalfeature"||kind.endsWith("Feature")){
     buildFeature(record,sys,report,slug,kind);
+    if(kind==="raceFeature"&&record._bccOption)applyTraits(record,adv,report,index);
     if(kind==="optionalfeature"){
       const normalize=value=>String(value).split(".").at(-1).toLowerCase().replace(/[^a-z0-9]/g,"").replace(/s$/,"");
       const names=[...index.records.class,...index.records.subclass].flatMap(r=>(r.optionalfeatureProgression??[]).filter(p=>p.featureType?.some(t=>record.featureType?.includes(t))).map(p=>p.name));
@@ -672,12 +690,14 @@ export async function convertOne(entry,index,content,report){
     const uses=resourceUses(record);if(uses&&(!sys.uses?.max))sys.uses=uses;
   }
   effects.push(...entitlementEffects(grantDecisions));
+  addPassiveEffects(record,kind,effects,report);
   if(record.foundryActivities)sys.activities=normalizeActivities(record.foundryActivities,effects,index,record,report);
   if(kind==="item"&&record.attachedSpells){
     if(!record.foundryActivities&&!Array.isArray(overlay?.activities))addItemSpellActivities(record,sys,index,lookupUid,report);
     else {const pending={...sys,activities:clone(sys.activities??{})};addItemSpellActivities(record,pending,index,lookupUid,report);if(Object.keys(pending.activities??{}).length!==Object.keys(sys.activities??{}).length)report.incomplete.add(`${record.name}: supplemental activities leave attached spells unrepresented; supplement retained`);}
   }
   addResourceSpellActivities(record,sys,index,report);
+  if(kind==="spell"&&addSummonProfiles(record,sys,index,report))spellSynthesisIssues=spellSynthesisIssues.filter(s=>!s.startsWith("summoning requires Actor profiles"));
   if(kind==="classFeature"&&sys.uses?.max&&/^\d+$/.test(String(sys.uses.max))){const parent=index.all.find(e=>e.kind==="class"&&canon(e.record.name)===canon(record.className)&&canon(e.record.source)===canon(record.classSource));if(parent&&resourceScales(parent.record,index,slug).some(a=>a.configuration.identifier===slug(record.name)))sys.uses.max=`@scale.${slug(parent.record.name)}.${slug(record.name)}`;}
   if(sys.uses?.max){
     const explicit=overlay?.system?.["uses.recovery"]??record.foundrySystem?.["uses.recovery"];
@@ -701,6 +721,7 @@ export async function convertOne(entry,index,content,report){
     }
   }
   consolidateScaleValues(adv,slug,report,record.name);
+  applyRulesAdvancements(kind,record,adv,report);
   if(Object.keys(adv).length)sys.advancement=adv;
   const documentType=overlay?.type??record.foundryType??(kind==="raceFeature"||["classFeature","subclassFeature","optionalfeature"].includes(kind)?"feat":
     kind==="item"?classifyItem(record):PACK_DEFS[kind][3]);

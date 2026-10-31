@@ -1,4 +1,5 @@
 import {itemType} from "./equipment.mjs";
+import {sourceColor} from "./source-colors.mjs";
 const LEVEL = n => Number(n) ? `Level ${Number(n)}` : "Cantrips";
 export function documentPath(entry,index) {
   const {kind,record:r} = entry, prefix = r._bccDependency ? [`Dependencies · ${r.source}`] : [];
@@ -9,7 +10,7 @@ export function documentPath(entry,index) {
     const subtype = type === "weapon" ? `${r.weaponCategory === "martial" ? "Martial" : "Simple"} ${String(r.type).split("|")[0] === "R" ? "Ranged" : "Melee"}` : null;
     return [...prefix,group,...subtype ? [subtype] : []];
   }
-  if (["classFeature","subclassFeature"].includes(kind)) return [...prefix,r.className ?? "Features",`Level ${Number(r.level ?? 0)}`];
+  if (["classFeature","subclassFeature"].includes(kind)) return [...prefix,r.className ?? "Features",`Level ${kind==="subclassFeature"&&r._bccTargetRules==="2024"?Math.max(3,Number(r.level??0)):Number(r.level??0)}`];
   if (kind === "raceFeature") return [...prefix,r.raceName ?? "Species Features"];
   if (kind === "subclass") return [...prefix,r.className ?? "Subclasses"];
   if (kind === "feat") return [...prefix,({O:"Origin Feats",G:"General Feats",EB:"Epic Boons"})[r.category] ?? "Feats"];
@@ -29,11 +30,27 @@ export async function organizeDocuments(pack,documents,entries,index) {
     let parent = null, path = "";
     for (const [depth,name] of documentPath(entry,index).entries()) {
       path += `/${name}`;const _id = await folderId(`${pack.collection}:${path}`);
-      if (!folders.has(_id) && !needed.has(_id)) needed.set(_id,{_id,name,type:pack.documentName,folder:parent,sorting:entry.kind === "chapter" ? "m" : "a",sort:needed.size*10000,flags:{bcc:{managed:true,depth}}});
+      const level=/^Level (\d+)$/.exec(name),sort=level?Number(level[1])*10000:needed.size*10000;
+      if (!folders.has(_id) && !needed.has(_id)) needed.set(_id,{_id,name,type:pack.documentName,folder:parent,sorting:entry.kind === "chapter" ? "m" : "a",sort,color:sourceColor(entry.record.source),flags:{bcc:{managed:true,depth}}});
       parent = _id;
     }
     doc.folder = parent;doc.sort = entry.kind === "chapter" ? Number(entry.record.sequence)*10000 : i*10000;
   }
   // Parents precede children in insertion order. Existing folders are never deleted or renamed.
   for (const folder of needed.values()) await Folder.create(folder,{pack:pack.collection,keepId:true});
+  // Manual sorting belongs to the parent directory; repair existing BCC level
+  // folders as well so reimporting fixes the previous 15,3,5,9 order.
+  const all=[...folders.values(),...needed.values()],parents=new Set(all.filter(f=>/^Level \d+$/.test(f.name)&&f.flags?.bcc?.managed).map(f=>f.folder?.id??f.folder??null));
+  const updates=[];
+  if(parents.has(null)&&globalThis.game?.settings){
+    const current=game.settings.get("core","collectionSortingModes");
+    const modes=current&&typeof current==="object"?{...current}:{};
+    if(modes[pack.collection]!=="m"){modes[pack.collection]="m";await game.settings.set("core","collectionSortingModes",modes);}
+  }
+  for(const f of all){if(!f.flags?.bcc?.managed)continue;const id=f.id??f._id,row={_id:id};
+    if(parents.has(id)&&f.sorting!=="m")row.sorting="m";
+    const level=/^Level (\d+)$/.exec(f.name);if(level&&f.sort!==Number(level[1])*10000)row.sort=Number(level[1])*10000;
+    if(Object.keys(row).length>1)updates.push(row);
+  }
+  if(updates.length)await Folder.updateDocuments(updates,{pack:pack.collection});
 }

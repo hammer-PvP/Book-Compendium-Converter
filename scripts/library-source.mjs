@@ -183,9 +183,9 @@ export async function readLibraryBook(id) {
       const allowed=new Set([canon(sourceId),canon(source)]);
       // A supplemental class may declare a core spell list without publishing spells itself.
       // Select a single rules-compatible base catalog, never every supplement in the lookup.
-      if(!memberships.some(([src,rows])=>allowed.has(canon(src))&&rows.length)){
+      {
         const rules=ruleOf(record)??sourceRules.get(canon(record.source));
-        const base=memberships.filter(([src,rows])=>rows.length&&sourceRules.get(canon(src))===rules).sort((a,b)=>b[1].length-a[1].length)[0];
+        const base=memberships.filter(([src,rows])=>rows.length&&sourceRules.get(canon(src))===rules).sort((a,b)=>b[1].length-a[1].length||a[0].localeCompare(b[0]))[0];
         if(base)allowed.add(canon(base[0]));
       }
       for(const [src,spells] of memberships)if(allowed.has(canon(src)))for(const [spellName] of spells)await resolve("spell",`${spellName}|${src}`,record.source,reasonFor(record,"declared class spell list"));
@@ -225,11 +225,14 @@ export async function readLibraryBook(id) {
       else if (v && typeof v === "object") for (const [key, val] of Object.entries(v)) if (!["name", "ability", "choose", "resourceName"].includes(key)) spells(val);
     }
     spells(record.additionalSpells);
+    if(kind==="spell"&&record.miscTags?.includes("SMN")){
+      for(const match of JSON.stringify(record.entries??[]).matchAll(/\{@creature\s+([^}]+)\}/gi))refs.push(["monster",match[1]]);
+    }
     if (kind === "monster") spells(record.spellcasting?.map(s => ({spells: s.spells, will: s.will, daily: s.daily, rest: s.rest, constant: s.constant,ritual:s.ritual,weekly:s.weekly})));
     for (const [refKind, uid] of refs) if (uid) await resolve(refKind, uid, record.source,reasonFor(record,"explicit mechanical reference"));
   }
   const records = Object.fromEntries(KINDS.map(kind => [kind, [...selected.values()].filter(x => x.kind === kind).map(x => x.record)]));
-  for(const rows of Object.values(records))for(const r of rows)r._bccRules=ruleOf(r)??sourceRules.get(canon(r.source))??null;
+  for(const rows of Object.values(records))for(const r of rows)r._bccRules=(r.classSource?sourceRules.get(canon(r.classSource)):null)??ruleOf(r)??sourceRules.get(canon(r.source))??null;
   const chapters = volume?.bookData?.find(e => canon(e.id) === canon(sourceId))?.data ?? [];
   return {book, sourceId, chapters, records, foundry, spellLookup: lookup,proficiencyItems:Object.fromEntries(catalog("item").map(r=>[canon(r.name).replace(/[^a-z0-9]/g,""),{name:r.name,type:r.type,weaponCategory:r.weaponCategory,property:r.property??[],source:r.source}])),
     preparationIssues: [...new Map(issues.filter(i=>canon(i.source)===canon(sourceId)||[...selected.values()].some(e=>e.kind===i.category&&canon(e.record.name)===canon(i.name)&&canon(e.record.source)===canon(i.source))).map(i => [JSON.stringify(i), i])).values()],

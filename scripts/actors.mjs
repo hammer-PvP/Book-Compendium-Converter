@@ -50,7 +50,7 @@ export async function buildActor(entry, index, content, report, helpers) {
     }
   } else {
     system.details.type = /air|spelljammer/i.test(r.vehicleType ?? "") ? "air" : /land|infwar/i.test(r.vehicleType ?? "") ? "land" : "water";
-    system.attributes.capacity = {cargo:{value:Number(r.capCargo ?? 0),units:"ton"},creature:String(r.capCreature ?? "")};
+    system.attributes.capacity = {cargo:{value:Number(r.capCargo ?? 0),units:"tn"},creature:String(r.capCreature ?? "")};
     if (stats.dt != null) system.attributes.hp.dt = Number(stats.dt);
   }
   for (const [input,output] of [["resist","dr"],["immune","di"],["vulnerable","dv"],["conditionImmune","ci"]]) {
@@ -144,5 +144,5 @@ export async function buildActor(entry, index, content, report, helpers) {
   }
   if (r.spellcastingHidden) report.incomplete.add(`${r.name}: hidden spellcasting metadata requires verification`);
   bindEmbeddedResources(items);
-  return {_id,name:r.name,type,system,items,flags:{bcc:{sourceId:content.sourceId,category:kind,identity:entry.key,converterVersion:"0.0.8",dependency:!!r._bccDependency}},prototypeToken:{name:r.name,actorLink:false}};
+  return {_id,name:r.name,type,system,items,flags:{bcc:{sourceId:content.sourceId,category:kind,identity:entry.key,converterVersion:"0.0.10",dependency:!!r._bccDependency}},prototypeToken:{name:r.name,actorLink:false}};
 }

@@ -2,6 +2,8 @@ import {AssetImporter} from "./assets.mjs";
 import {organizeDocuments} from "./organization.mjs";
 import {contentHash, auditReferences} from "./integrity.mjs";
 import {saveSpellLists} from "./spell-lists.mjs";
+import {prepareRules} from "./rules-policy.mjs";
+import {sourceColor} from "./source-colors.mjs";
 import {buildIndex, convertOne, createReport, finalizeReport, PACK_DEFS} from "./converter.mjs";
 
 // Use the game-system document classes, not Foundry core globals.
@@ -18,10 +20,10 @@ const batches=(items,size=35)=>Array.from({length:Math.ceil(items.length/size)},
 
 async function getFolder(book){
   const folders=game.folders.filter(f=>f.type==="Compendium"&&f.name===book.name&&f.flags?.bcc?.sourceId===book.id);
-  if(folders.length)return folders[0];
+  if(folders.length){const folder=folders[0],color=sourceColor(book.id);if(folder.color!==color&&typeof folder.update==="function")await folder.update({color});return folder;}
   const collision=game.folders.some(f=>f.type==="Compendium"&&f.name===book.name);
   if(collision)throw new Error(`Já existe uma pasta de Compendiums chamada "${book.name}". Renomeie-a para evitar conflito.`);
-  return Folder.create({name:book.name,type:"Compendium",color:"#987e4d",flags:{bcc:{sourceId:book.id}}});
+  return Folder.create({name:book.name,type:"Compendium",color:sourceColor(book.id),flags:{bcc:{sourceId:book.id}}});
 }
 
 async function getPack(index,kind,folder,content){
@@ -42,6 +44,7 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const transientError=error=>/timeout|timed out|network|failed to fetch|502|503|504|429|connection reset|socket hang up|aborterror/i.test(String(error?.message??error));
 function recordFailure(report,kind,doc,error,phase){
   const issue={category:kind,name:doc.name,id:doc._id,phase,message:String(error?.message??error)};
+  if(report.validationFailures.some(x=>x.category===kind&&x.id===doc._id&&x.phase===phase&&x.message===issue.message))return;
   report.validationFailures.push(issue);
   report.errors.push(`${kind} / ${doc.name} [${doc._id}]: ${phase} — ${issue.message}`);
 }
@@ -51,7 +54,12 @@ function preparationWarnings(document,kind,report){
     if(!report.preparationWarnings.some(x=>JSON.stringify(x)===JSON.stringify(issue))){report.preparationWarnings.push(issue);report.incomplete.add(`${doc.name}: native preparation ${issue.type} — ${issue.message}`);}
   }
 }
-function preflight(cls,doc,pack,kind,report){
+export function preflight(cls,doc,pack,kind,report){
+  // Foundry reports preparation failures through Hooks.onError and may return
+  // a schema-valid but unusable document. Observe the synchronous constructor
+  // only, and always release the listener, including on exceptions.
+  const errors=[],hooks=globalThis.Hooks;
+  const listener=hooks?.on?.("error",(location,error,data={})=>{errors.push({message:[data.msg,error?.message??String(error??location)].filter(Boolean).join(" — ")});});
   try{
     // Constructing a client document does not persist it; this also validates nested dnd5e Activities.
     const test=new cls(doc,{pack:pack.collection});
@@ -62,8 +70,11 @@ function preflight(cls,doc,pack,kind,report){
     if(typeof test.validate==="function" && test.validate({strict:true})===false)
       throw new Error("A validação estrita retornou false");
     preparationWarnings(test,kind,report);
+    for(const error of errors)recordFailure(report,kind,doc,error,"native preparation");
+    if(errors.length)return false;
     return true;
   }catch(error){recordFailure(report,kind,doc,error,"schema preflight");return false;}
+  finally{if(listener!=null)hooks.off("error",listener);}
 }
 async function writeOne(cls,pack,doc,kind,report){
   for(let attempt=1;attempt<=3;attempt++){
@@ -158,8 +169,10 @@ async function createBatch(pack,docs,kind,report,options,onBatch=()=>{}){
 export async function importBook(content, onProgress=()=>{}, options={mode:"create"}){
   if(!game.user.isGM)throw new Error("A importação requer usuário GM.");
   if(game.system.id!=="dnd5e")throw new Error("A versão inicial requer o sistema dnd5e.");
+  content=prepareRules(content,options.targetRules??content.targetRules??"source");
   const index=await buildIndex(content);
   const report=createReport(content);
+  report.targetRules=content.targetRules;
   const assets=new AssetImporter(content,index,report,text=>onProgress(text,{phase:"assets",completed:0,total:index.all.length,percent:0}));
   await assets.prepare();
   const folder=await getFolder(content.book);

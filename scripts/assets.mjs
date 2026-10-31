@@ -6,7 +6,7 @@ const ID="book-compendium-converter";
 const norm=value=>String(value??"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]/g,"");
 const extension=value=>/\.([a-z0-9]+)(?:[?#]|$)/i.exec(value)?.[1]?.toLowerCase();
 const TYPES={webp:"image/webp",png:"image/png",jpg:"image/jpeg",jpeg:"image/jpeg",svg:"image/svg+xml",gif:"image/gif",avif:"image/avif"};
-const FALLBACK={spell:"icons/svg/book.svg",class:"icons/svg/book.svg",subclass:"icons/svg/book.svg",race:"icons/svg/mystery-man.svg",background:"icons/svg/door-exit.svg",feat:"icons/svg/upgrade.svg",optionalfeature:"icons/svg/upgrade.svg",raceFeature:"icons/svg/upgrade.svg",classFeature:"icons/svg/upgrade.svg",subclassFeature:"icons/svg/upgrade.svg",monster:"icons/svg/mystery-man.svg",object:"icons/svg/item-bag.svg",vehicle:"icons/svg/wing.svg",weapon:"icons/svg/sword.svg",equipment:"icons/svg/shield.svg",tool:"icons/svg/hammer.svg",loot:"icons/svg/item-bag.svg",container:"icons/svg/chest.svg",consumable:"icons/svg/potion.svg"};
+const FALLBACK={spell:"icons/svg/book.svg",class:"icons/svg/book.svg",subclass:"icons/svg/book.svg",race:"icons/svg/mystery-man.svg",background:"icons/svg/door-exit.svg",feat:"icons/svg/upgrade.svg",optionalfeature:"icons/svg/book.svg",raceFeature:"icons/svg/book.svg",classFeature:"icons/svg/book.svg",subclassFeature:"icons/svg/book.svg",monster:"icons/svg/mystery-man.svg",object:"icons/svg/item-bag.svg",vehicle:"icons/svg/wing.svg",weapon:"icons/svg/sword.svg",equipment:"icons/svg/shield.svg",tool:"icons/svg/hammer.svg",loot:"icons/svg/item-bag.svg",container:"icons/svg/chest.svg",consumable:"icons/svg/potion.svg"};
 const CATEGORY_CORE={A:"icons/weapons/ammunition/arrow-simple.webp",AF:"icons/weapons/ammunition/ammunition-brass-silver.webp",FD:"icons/consumables/food/bowl-stew-brown.webp",GS:"icons/sundries/gaming/dice-runed-brown.webp"};
 export function imageSource(value){
   if(typeof value!=="string"||!value.trim())return null;
@@ -59,7 +59,7 @@ export class AssetImporter{
     for(const [i,pack] of packs.entries()){
       this.onProgress(`Ícones: indexando fontes disponíveis (${i+1}/${packs.length})...`);
       try{
-        const entries=await pack.getIndex({fields:["name","type","img","system.identifier","system.source","system.requirements"]});
+        const entries=await pack.getIndex({fields:["name","type","img","system.identifier","system.source","system.requirements","system.type"]});
         for(const row of entries)if(row.img)this.catalog.push({name:row.name,type:row.type,img:row.img,system:row.system??{},pack:pack.collection});
       }catch(error){this.stats.failures.push({phase:"index",source:pack.collection,message:String(error.message??error)});}
     }
@@ -81,9 +81,15 @@ export class AssetImporter{
     if(!portraits)out.push(...matched);
     let images=[...(r.fluff?.images??[]),...(r.images??[]),...(this.artwork.get(artworkKey(kind,r))??[])];
     let inherited=false;
-    if(!images.length){const parent=r._bccImageParent??(r._bccVariantOf?{kind,...r._bccVariantOf}:r.raceName?{kind:"race",name:r.raceName,source:r.source}:r.className?{kind:"class",name:r.className,source:r.classSource??r.source}:null);if(parent){images=this.artwork.get(artworkKey(parent.kind,parent))??[];inherited=true;}}
+    if(!images.length){let parent=r._bccImageParent??(r._bccVariantOf?{kind,...r._bccVariantOf}:r.raceName?{kind:"race",name:r.raceName,source:r.source}:r.className?{kind:"class",name:r.className,source:r.classSource??r.source}:null);
+      if(!parent&&kind==="optionalfeature"&&r.featureType?.length){const owners=this.index.all.filter(e=>["class","subclass"].includes(e.kind)&&(e.record.optionalfeatureProgression??[]).some(p=>p.featureType?.some(t=>r.featureType.includes(t))));const identities=new Map(owners.map(e=>[`${e.kind}|${e.record.name}|${e.record.source}`,{kind:e.kind,...e.record}]));if(identities.size===1)parent=[...identities.values()][0];}
+      if(parent){images=this.artwork.get(artworkKey(parent.kind,parent))??[];inherited=true;}}
     for(const image of images){const source=href(image,this.root);if(source&&(this.artworkAvailable||/^https?:\/\//i.test(source)))out.push({source,via:inherited?"inherited":"artwork"});}
     if(portraits)out.push(...matched);
+    if(kind==="monster"&&r.hasToken){
+      const token=r.token??{},source=token.source??r.source,name=token.name??r.name;
+      if(this.artworkAvailable)out.push({source:`${this.root.replace(/\/$/,"")}/bestiary/tokens/${source}/${name}.webp`,via:"token"});
+    }
     if(kind==="item"&&CATEGORY_CORE[String(r.type).split("|")[0]])out.push({source:CATEGORY_CORE[String(r.type).split("|")[0]],via:"category"});
     const native=globalThis.CONFIG?.DND5E?.defaultArtwork?.[doc.type==="npc"||doc.type==="vehicle"?"Actor":"Item"]?.[doc.type];
     const school=doc.type==="spell"?globalThis.CONFIG?.DND5E?.spellSchools?.[doc.system?.school]?.icon:null;
@@ -144,10 +150,10 @@ export class AssetImporter{
     }
     for(const [i,e] of (doc.effects??[]).entries()){const path=await this.field(doc,`effects.${e._id??i}.img`,[{source:e.img??"icons/svg/aura.svg",via:"effect"}],files);if(path)e.img=path;}
     if(doc.prototypeToken){const media=kind==="object"?"objects":kind==="vehicle"?"vehicles":"bestiary";
-      const token=r.token?.name&&r.token?.source?`${this.root.replace(/\/$/,"")}/${media}/tokens/${r.token.source}/${r.token.name}.webp`:typeof r.token==="string"?r.token:null;
+      const token=r.token?.name&&r.token?.source?`${this.root.replace(/\/$/,"")}/${media}/tokens/${r.token.source}/${r.token.name}.webp`:typeof r.token==="string"?r.token:r.hasToken&&this.artworkAvailable?`${this.root.replace(/\/$/,"")}/${media}/tokens/${r.source}/${r.name}.webp`:null;
       const source=r.tokenUrl??href(r.tokenHref,this.root)??token??doc.prototypeToken.texture?.src;const candidates=source?[{source,via:"token"},...doc.img?[{source:doc.img,via:"portrait"}]:[]]:doc.img?[{source:doc.img,via:"portrait"}]:[];if(candidates.length){const path=await this.field(doc,"prototypeToken.texture.src",candidates,files);if(path){doc.prototypeToken.texture??={};doc.prototypeToken.texture.src=path;}}}
     if(files.length){doc.flags??={};doc.flags.bcc??={};doc.flags.bcc.assets={version:1,root:ASSET_ROOT,files};}
-    for(const item of doc.items??[]){const ref=this.refs.get(item._stats?.compendiumSource??item.flags?.bcc?.actorOrigin);await this.apply(item,ref);}
+    for(const item of doc.items??[]){const ref=this.refs.get(item._stats?.compendiumSource??item.flags?.bcc?.actorOrigin)??{kind:"monsterFeature",record:{name:item.name,source:r.source,_bccRules:rules(r),_bccImageParent:{kind,name:r.name,source:r.source}}};await this.apply(item,ref);}
     return doc;
   }
   async verify(){

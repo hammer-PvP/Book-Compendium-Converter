@@ -2,7 +2,7 @@
   "id": "book-compendium-converter",
   "title": "Book Compendium Converter",
   "description": "Experimental local book importer for native D&D5e world compendiums, including choices, equipment, spell lists and embedded NPC features.",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "authors": [
     {
       "name": "hammer-PvP & OpenAI"
