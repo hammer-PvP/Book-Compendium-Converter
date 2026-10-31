@@ -14,7 +14,11 @@ export function prerequisites(record, report, slug) {
   const level = availableLevel(record), items = new Set();
   if (alternatives.length === 1) for (const [key, value] of Object.entries(alternatives[0])) {
     if (key === "level") {}
-    else if (["feat","feature","optionalfeature","spell"].includes(key)) for (const uid of Array.isArray(value) ? value : [value]) items.add(`${key==="spell"?"spell":"feat"}:${slug(String(uid).split("|")[0].replace(/#.*$/,""))}`);
+    else if (["feat","feature","optionalfeature"].includes(key)) for (const uid of Array.isArray(value) ? value : [value]) {
+      if(typeof uid==="string")items.add(slug(uid.split("|")[0].replace(/#.*$/,"")));
+      else report.incomplete.add(`${record.name}: structured ${key} prerequisite is retained for the generic evaluator`);
+    }
+    else if(key==="spell") {} // Dynamic/known-spell conditions use the complete generic expression.
     else if (key !== "level") report.incomplete.add(`${record.name}: prerequisite ${key} retained in provenance; not representable by native item/level prerequisites`);
   }
   if (alternatives.length > 1) report.incomplete.add(`${record.name}: alternative prerequisite expression retained; native level is its common lower bound`);

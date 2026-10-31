@@ -1,3 +1,4 @@
+import {registerPrerequisiteRuntime} from "./prerequisite-runtime.mjs";
 /** Resource references cannot know future embedded Item IDs. This small,
  * original runtime is included in exported modules; it has no BCC dependency. */
 const moduleId=/\/modules\/([^/]+)\//.exec(import.meta.url)?.[1];
@@ -18,6 +19,7 @@ export function bindExportedResources(items,owner=moduleId){
   return updates;
 }
 if(globalThis.Hooks){
+  Hooks.once("init",registerPrerequisiteRuntime);
   const pending=new Map();
   const schedule=item=>{
     const actor=item.actor;if(!actor||actor.pack||!game.user.isGM||game.users?.activeGM?.id&&game.users.activeGM.id!==game.user.id)return;

@@ -1,4 +1,4 @@
-import {getBooks,readBook,SOURCE_ROOT} from "./source.mjs";
+import {getBooks,readBook,SOURCE_ROOT,sourceLabel,refreshSources} from "./source.mjs";
 import {importBook} from "./importer.mjs";
 import {prepareRules} from "./rules-policy.mjs";
 import {sourceColor} from "./source-colors.mjs";
@@ -9,10 +9,10 @@ const kindNames={race:"Species",background:"Backgrounds",feat:"Feats",optionalfe
  class:"Classes",subclass:"Subclasses",classFeature:"Class Features",subclassFeature:"Subclass Features",
  spell:"Spells",item:"Items & Equipment",monster:"Monsters",object:"Objects",vehicle:"Vehicles"};
 export class BCCApp extends foundry.applications.api.ApplicationV2 {
-  static DEFAULT_OPTIONS={id:"bcc-book-importer",window:{title:"Book Compendium Converter · 0.0.11",resizable:true},position:{width:760,height:740}};
+  static DEFAULT_OPTIONS={id:"bcc-book-importer",window:{title:"Book Compendium Converter · 0.1.0",resizable:true},position:{width:760,height:740}};
   constructor(options={}){super(options);this.books=null;this.bookId="XPHB";this.preview=null;this.busy=false;this.status="";this.result=null;this.error="";this.importMode="create";this.progress=null;this.acknowledged=false;this.search="";this.targetRules="source";}
   async load(){
-    try{this.books=(await getBooks()).slice().sort((a,b)=>a.name.localeCompare(b.name,"en",{numeric:true,sensitivity:"base"}));this.targetRules=game.settings.get("book-compendium-converter","importRules")??"source";if(!this.books.some(b=>b.id===this.bookId))this.bookId=this.books[0]?.id;this.error="";}
+    try{refreshSources();this.books=(await getBooks()).slice().sort((a,b)=>a.name.localeCompare(b.name,"en",{numeric:true,sensitivity:"base"}));this.targetRules=game.settings.get("book-compendium-converter","importRules")??"source";if(!this.books.some(b=>b.id===this.bookId))this.bookId=this.books[0]?.id;this.error="";}
     catch(e){this.error=e.message;this.books=[];}
     return this;
   }
@@ -28,7 +28,7 @@ export class BCCApp extends foundry.applications.api.ApplicationV2 {
       <p class="bcc-note">Os números não incluem as Features derivadas de Species. Nesta versão, dados não estruturados e efeitos ausentes serão sinalizados no relatório.</p>
     </section>`:`<div class="bcc-empty">Selecione um livro e clique em <strong>Analisar livro</strong>.</div>`;
     const dependencyCount=Object.values(this.preview?.dependencies??{}).reduce((a,b)=>a+b,0);
-    const mode=`<label for="bcc-import-mode">Documentos existentes</label><select id="bcc-import-mode" ${this.busy?"disabled":""}><option value="create" ${this.importMode==="create"?"selected":""}>Adicionar somente os ausentes</option><option value="update" ${this.importMode==="update"?"selected":""}>Atualizar BCC sem alterações locais</option><option value="rebuild" ${this.importMode==="rebuild"?"selected":""}>Reconstruir documentos BCC deste livro</option></select><p class="bcc-note">${dependencyCount} dependências locais incluídas. Reconstruir substitui os dados dos documentos BCC existentes, incluindo alterações manuais.</p>`;
+    const mode=`<label for="bcc-import-mode">Documentos existentes</label><select id="bcc-import-mode" ${this.busy?"disabled":""}><option value="create" ${this.importMode==="create"?"selected":""}>Adicionar somente os ausentes</option><option value="update" ${this.importMode==="update"?"selected":""}>Atualizar BCC sem alterações locais</option><option value="rebuild" ${this.importMode==="rebuild"?"selected":""}>Reconstruir documentos BCC deste livro</option></select><p class="bcc-note">${dependencyCount} dependências incluídas. Reconstruir substitui os dados dos documentos BCC existentes, incluindo alterações manuais.</p>`;
     const message=this.error?`<p class="bcc-error">${escapeHtml(this.error)}</p>`:"";
     const progress=this.progress&&!this.acknowledged?`<section class="bcc-progress" aria-live="polite"><label>${escapeHtml(this.progress.phase==="done"?"Processamento finalizado":"Importação em andamento")} · <span class="bcc-percent">${this.progress.percent}%</span></label><progress max="100" value="${this.progress.percent}" aria-label="Progresso da importação"></progress><span class="bcc-count">${this.progress.completed}/${this.progress.total} documentos processados</span>${!this.busy?'<button type="button" data-action="acknowledge">OK</button>':""}</section>`:"";
     const status=this.status?`<p class="bcc-status">${escapeHtml(this.status)}</p>`:"";
@@ -39,8 +39,8 @@ export class BCCApp extends foundry.applications.api.ApplicationV2 {
       <p>${Object.values(this.result.created).reduce((a,b)=>a+b,0)} novos documentos · ${Object.values(this.result.updated??{}).reduce((a,b)=>a+b,0)} atualizados · ${Object.values(this.result.existing??{}).reduce((a,b)=>a+b,0)} já existentes · ${this.result.errors.length} erros de conversão, preparação ou gravação · ${this.result.unresolved.length} vínculos não resolvidos · ${this.result.incomplete.length} pontos mecânicos pendentes</p>
       ${assets}<button type="button" data-action="report"><i class="fas fa-file-arrow-down"></i> Baixar relatório JSON</button></section>`:"";
     const root=document.createElement("div");root.className="bcc-ui";
-    root.innerHTML=`<header class="bcc-heading"><h2>Book Compendium Converter</h2><p>Fonte local: <code>${SOURCE_ROOT}</code> · ${total} livros</p></header>
-      <section class="bcc-selector"><label for="bcc-book-search">Pesquisar livros</label><input type="search" id="bcc-book-search" value="${escapeHtml(this.search)}" placeholder="Nome ou sigla do livro" ${this.busy?"disabled":""}>
+    root.innerHTML=`<header class="bcc-heading"><h2>Book Compendium Converter</h2><p>Fonte: <strong>${sourceLabel()}</strong> · ${total} livros</p></header>
+      <section class="bcc-selector"><button type="button" data-action="refresh" ${this.busy?"disabled":""}>Atualizar catálogo</button><label for="bcc-book-search">Pesquisar livros</label><input type="search" id="bcc-book-search" value="${escapeHtml(this.search)}" placeholder="Nome ou sigla do livro" ${this.busy?"disabled":""}>
       <label for="bcc-select-book">Livro do 5etools</label><select id="bcc-select-book" ${this.busy?"disabled":""}>${options}</select>
       <label for="bcc-target-rules">Regras de destino</label><select id="bcc-target-rules" ${this.busy?"disabled":""}><option value="source" ${this.targetRules==="source"?"selected":""}>Preservar as versões da fonte</option><option value="2024" ${this.targetRules==="2024"?"selected":""}>2024 — compatibilidade de subclasses</option><option value="2014" ${this.targetRules==="2014"?"selected":""}>2014 — preferir variantes originais</option></select>
       <p class="bcc-note">2024 prefere variantes adaptadas e reúne concessões iniciais de subclasse no nível 3. Outros recursos da classe mantêm as regras de origem. Reanalise ao mudar esta opção.</p>
@@ -61,6 +61,7 @@ export class BCCApp extends foundry.applications.api.ApplicationV2 {
     root.querySelector("#bcc-target-rules")?.addEventListener("change",e=>{this.targetRules=e.target.value;this.preview=null;this.result=null;this.status="Reanalise o livro para aplicar as regras de destino.";this.render();});
     root.querySelector("#bcc-select-book")?.addEventListener("change",e=>{this.bookId=e.target.value;this.preview=null;this.result=null;this.progress=null;this.status="";this.error="";this.render();});
     root.querySelector("#bcc-import-mode")?.addEventListener("change",e=>{this.importMode=e.target.value;});
+    root.querySelector('[data-action="refresh"]')?.addEventListener("click",async()=>{this.preview=null;await this.load();await this.render();});
     root.querySelector('[data-action="inspect"]')?.addEventListener("click",()=>this.inspect());
     root.querySelector('[data-action="import"]')?.addEventListener("click",()=>this.importSelected());
     root.querySelector('[data-action="export"]')?.addEventListener("click",async()=>{if(!game.user.isGM)return;const exporter=await new BCCExportApp().load(this.bookId);await exporter.render(true);});
@@ -68,7 +69,7 @@ export class BCCApp extends foundry.applications.api.ApplicationV2 {
     root.querySelector('[data-action="report"]')?.addEventListener("click",()=>this.downloadReport());
   }
   async inspect(){if(this.busy)return;this.busy=true;this.error="";this.status="Carregando dados estruturados da publicação...";this.preview=null;await this.render();
-    try{this.preview=prepareRules(await readBook(this.bookId),this.targetRules);this.status="Dados carregados. Confira a distribuição por categoria.";}
+    try{this.preview=prepareRules(await readBook(this.bookId,{onProgress:text=>{this.status=text;const el=this.element?.querySelector(".bcc-status");if(el)el.textContent=text;}}),this.targetRules);this.status="Dados carregados. Confira a distribuição por categoria.";}
     catch(e){this.error=e.message;this.status="";console.error("BCC | Inspector:",e);}
     finally{this.busy=false;await this.render();}
   }

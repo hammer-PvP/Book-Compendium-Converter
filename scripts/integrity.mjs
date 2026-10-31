@@ -1,3 +1,4 @@
+import {sha256} from "./hash.mjs";
 /** Fingerprint native persisted data, not a raw input blueprint with missing defaults. */
 export async function contentHash(document) {
   const original = document.toObject ? document.toObject() : structuredClone(document);
@@ -7,8 +8,7 @@ export async function contentHash(document) {
     if (!value || typeof value !== "object") return value;
     return Object.fromEntries(Object.keys(value).sort().filter(k => !["_stats","contentHash","importedAt"].includes(k)).map(k => [k,stable(value[k])]));
   }
-  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(stable(original)))));
-  return [...bytes].map(x => x.toString(16).padStart(2,"0")).join("");
+  return sha256(JSON.stringify(stable(original)));
 }
 export function auditReferences(documents,index,report) {
   const expected = new Set(index.all.map(e => e.uuid));

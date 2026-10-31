@@ -1,10 +1,11 @@
+import {stableId as localId} from "./hash.mjs";
 import {bindEmbeddedResources} from "./resource-bindings.mjs";
 import {clone, plainText, textOf, canonical as lc} from "./data-model.mjs";
 import {genericActivity, resourceUses} from "./feature-mechanics.mjs";
 const ABILITIES = ["str","dex","con","int","wis","cha"];
 const SKILLS = {acrobatics:["acr","dex"],"animal handling":["ani","wis"],arcana:["arc","int"],athletics:["ath","str"],deception:["dec","cha"],history:["his","int"],insight:["ins","wis"],intimidation:["itm","cha"],investigation:["inv","int"],medicine:["med","wis"],nature:["nat","int"],perception:["prc","wis"],performance:["prf","cha"],persuasion:["per","cha"],religion:["rel","int"],"sleight of hand":["slt","dex"],stealth:["ste","dex"],survival:["sur","wis"]};
 const SIZES = {T:"tiny",S:"sm",M:"med",L:"lg",H:"huge",G:"grg"};
-async function localId(text) {const a = new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(text)));return [...a.slice(0,8)].map(x => x.toString(16).padStart(2,"0")).join("");}
+
 function crValue(value) {const s = String(typeof value === "object" ? value.cr ?? "0" : value ?? "0");const [a,b] = s.split("/").map(Number);return b ? a/b : a || 0;}
 const mod = value => Math.floor((Number(value ?? 10)-10)/2);
 export async function buildActor(entry, index, content, report, helpers) {
@@ -136,13 +137,17 @@ export async function buildActor(entry, index, content, report, helpers) {
   for (const raw of gear.values()) {
     const ref = lookup(index,"item",raw.item ?? raw.name,r.source);
     if (!ref || ref.virtual) {report.unresolved.add(`${r.name}: equipment ${raw.item ?? raw.name}`);continue;}
-    const item = await convert(ref,index,content,report);
-    item._id = await localId(`${entry.key}:equipment:${ref.key}`);
-    item._stats = {compendiumSource:ref.uuid};item.system.quantity = Number(raw.quantity ?? 1);item.system.equipped = true;
-    if(item.type==="container"&&item.system.quantity>1){report.incomplete.add(`${r.name}: multiple ${item.name} containers need separate native instances; quantity reduced to one`);item.system.quantity=1;}
-    if (!items.some(x => x._id === item._id)) items.push(item);
+    const sourceItem = await convert(ref,index,content,report),count=Number(raw.quantity??1);
+    const instances=sourceItem.type==="container"?count:1;
+    async function add(item,template,prefix,parentId=null){
+      item._id=await localId(prefix);item._stats={compendiumSource:template.uuid};item.system.equipped=true;
+      if(parentId)item.system.container=parentId;else delete item.system.container;
+      items.push(item);
+      for(const child of index.all.filter(e=>e.record._bccBundleInstance?.parentId===template._id))await add(await convert(child,index,content,report),child,`${prefix}:${child.key}`,item._id);
+    }
+    for(let i=0;i<instances;i++){const item=structuredClone(sourceItem);item.system.quantity=instances===1&&item.type!=="container"?count:1;await add(item,ref,`${entry.key}:equipment:${ref.key}${i?`:${i}`:""}`);}
   }
   if (r.spellcastingHidden) report.incomplete.add(`${r.name}: hidden spellcasting metadata requires verification`);
   bindEmbeddedResources(items);
-  return {_id,name:r.name,type,system,items,flags:{bcc:{sourceId:content.sourceId,category:kind,identity:entry.key,converterVersion:"0.0.11",dependency:!!r._bccDependency}},prototypeToken:{name:r.name,actorLink:false}};
+  return {_id,name:r.name,type,system,items,flags:{bcc:{sourceId:content.sourceId,category:kind,identity:entry.key,converterVersion:"0.1.0",dependency:!!r._bccDependency}},prototypeToken:{name:r.name,actorLink:false}};
 }

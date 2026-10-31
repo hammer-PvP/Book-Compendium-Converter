@@ -1,3 +1,5 @@
+import {sha256} from "./hash.mjs";
+import {unsupportedPrerequisites} from "./prerequisites.mjs";
 import {databaseEntries,levelDatabase} from "./export-database.mjs";
 import {ExportZip} from "./export-zip.mjs";
 import {imageSource} from "./assets.mjs";
@@ -107,6 +109,7 @@ export async function validateExport(sources,identity,onProgress=()=>{}){
         else report.errors.push(`${doc.name}: dependência externa indisponível ${collection}`);
       }
       if(text.startsWith("bcc-unresolved:")&&!path.includes("description"))report.errors.push(`${doc.name}: recurso não resolvido ${text.slice(15)}`);
+      if(path.includes("prerequisites")&&/(?:^|:)object-object$|^\[object Object\]$/.test(text))report.errors.push(`${doc.name}: pré-requisito serializado incorretamente; reconstrua o documento com a versão atual.`);
       if(text.includes("Actor.")||text.includes("Item.")||text.includes("JournalEntry.")){
         if(!path.includes("flags")&&!path.includes("_stats")&&/(?:^|@UUID\[|data-uuid=["'])((?:Actor|Item|JournalEntry)\.[A-Za-z0-9]{16})(?=$|[.\]"'])/.test(text))report.errors.push(`${doc.name}: vínculo direto com documento do World; inclua uma referência de compêndio.`);
       }
@@ -118,6 +121,18 @@ export async function validateExport(sources,identity,onProgress=()=>{}){
     if(row){const doc=row.documents.find(d=>d._id===parts[4]);if(!doc||!embeddedExists(doc,parts.slice(5)))report.errors.push(`Documento referenciado não encontrado: ${uuid}`);}
     else {try{if(!(await fromUuid(uuid)))report.errors.push(`Referência externa não encontrada: ${uuid}`);}catch(error){report.errors.push(`${uuid}: ${error.message}`);}}
   }
+  // Containers use sibling IDs rather than UUIDs; validate these links too.
+  function containers(docs,label){
+    const byId=new Map(docs.map(d=>[d._id,d]));
+    for(const doc of docs){
+      if(doc.system?.container){const parent=byId.get(doc.system.container);if(!parent||parent.type!=="container")report.errors.push(`${label} / ${doc.name}: container ausente ou inválido ${doc.system.container}`);
+        const seen=new Set([doc._id]);let current=doc;while(current?.system?.container){const id=current.system.container;if(seen.has(id)){report.errors.push(`${label} / ${doc.name}: ciclo de containers`);break;}seen.add(id);current=byId.get(id);}}
+      if(doc.type==="container"&&Number(doc.system?.quantity??1)!==1)report.errors.push(`${label} / ${doc.name}: container precisa de uma instância por unidade`);
+      for(const issue of unsupportedPrerequisites(doc.flags?.bcc?.prerequisiteExpression))report.warnings.push(`${label} / ${doc.name}: ${issue}`);
+      if(doc.items)containers(doc.items,`${label} / ${doc.name}`);
+    }
+  }
+  for(const row of packs.values())containers(row.documents,row.label);
   const assets=new Map();
   for(const row of packs.values())for(const doc of row.documents)strings(doc,(text)=>{
     for(const raw of mediaReferences(text)){
@@ -139,7 +154,7 @@ export async function validateExport(sources,identity,onProgress=()=>{}){
       if(["webp","png","jpg","jpeg","svg","gif","avif"].includes(ext)&&!validImageSignature(ext,new Uint8Array(await blob.slice(0,1024).arrayBuffer())))throw Error("Formato de imagem inválido");
       if(!ext)throw Error("Extensão de mídia não identificada");
       totalBytes+=blob.size;if(totalBytes>512*1024*1024)throw Error("Seleção maior que 512 MiB; exporte menos livros por vez.");
-      const digest=[...new Uint8Array(await crypto.subtle.digest("SHA-256",await blob.arrayBuffer()))].map(n=>n.toString(16).padStart(2,"0")).join("");
+      const digest=await sha256(await blob.arrayBuffer());
       asset.path=`assets/${digest}.${ext}`;asset.blob=blob;
     }catch(error){report.errors.push(`Mídia ${asset.source}: ${error.message}`);}
     await pause();
@@ -178,6 +193,7 @@ export async function buildExport(snapshot,onProgress=()=>{}){
   for(const asset of snapshot.assets.values()){if(seen.has(asset.path))continue;seen.add(asset.path);onProgress(`Incluindo mídia ${++count}/${snapshot.report.assets}...`);await zip.add(`${root}/${asset.path}`,asset.blob);await pause();}
   const runtimeResponse=await fetch(foundry.utils.getRoute?.("modules/book-compendium-converter/scripts/export-runtime.mjs")??"modules/book-compendium-converter/scripts/export-runtime.mjs",{credentials:"same-origin"});if(!runtimeResponse.ok)throw Error("Não foi possível carregar o suporte do módulo exportado.");
   await zip.add(`${root}/scripts/runtime.mjs`,await runtimeResponse.text(),{compress:true});
+  for(const file of ["prerequisite-runtime.mjs","prerequisites.mjs","spell-filter.mjs","containers-runtime.mjs"]){const response=await fetch(foundry.utils.getRoute?.(`modules/book-compendium-converter/scripts/${file}`)??`modules/book-compendium-converter/scripts/${file}`,{credentials:"same-origin"});if(!response.ok)throw Error(`Não foi possível carregar ${file}`);await zip.add(`${root}/scripts/${file}`,await response.text(),{compress:true});}
   await zip.add(`${root}/export-report.json`,JSON.stringify(snapshot.report,null,2),{compress:true});
   await zip.add(`${root}/README.md`,`# ${snapshot.manifest.title}\n\nExtract this folder to FoundryVTT/Data/modules/${root}/, restart Foundry and enable the module in a D&D5e world. Native compendiums and spell lists are provided without BCC, Plutonium or local 5etools data. Any external module dependencies are listed in module.json. Existing Actor inventories are not synchronized.\n\nThis package contains a snapshot of the validated compendium documents; it does not certify mechanical completeness.\n`);
   return zip.blob();

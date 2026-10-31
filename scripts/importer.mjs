@@ -1,3 +1,4 @@
+import {getSourceSession} from "./source.mjs";
 import {AssetImporter} from "./assets.mjs";
 import {organizeDocuments} from "./organization.mjs";
 import {contentHash, auditReferences} from "./integrity.mjs";
@@ -222,6 +223,7 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
   }
   for(const issue of await saveSpellLists(verifiedLists))report.incomplete.add(`Spell-list registration ${issue.uuid}: ${issue.message}`);
   if(options.mode!=="create")report.information.add("Reload Foundry after rebuilding to refresh the native spell-list registry. Obsolete packs and documents are not automatically removed.");
+  if(content.sourceContext)report.sourceContext={token:content.sourceContext.token,...getSourceSession(content).metadata};
   report.countDocuments=index.all.length;
   report.persistedTotal=Object.values(report.created).reduce((a,b)=>a+b,0)+Object.values(report.updated).reduce((a,b)=>a+b,0)+
     Object.values(report.existing).reduce((a,b)=>a+b,0);

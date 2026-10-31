@@ -1,3 +1,4 @@
+import {stableId as folderId} from "./hash.mjs";
 import {itemType} from "./equipment.mjs";
 import {sourceColor} from "./source-colors.mjs";
 const LEVEL = n => Number(n) ? `Level ${Number(n)}` : "Cantrips";
@@ -21,7 +22,7 @@ export function documentPath(entry,index) {
   }
   return prefix;
 }
-async function folderId(key) {const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(key)));return [...bytes.slice(0,8)].map(n => n.toString(16).padStart(2,"0")).join("");}
+
 export async function organizeDocuments(pack,documents,entries,index) {
   const folders = new Map((pack.folders?.contents ?? [...(pack.folders ?? [])]).map(f => [f.id ?? f._id,f]));
   const needed = new Map(), entryById = new Map(entries.map(e => [e._id,e]));

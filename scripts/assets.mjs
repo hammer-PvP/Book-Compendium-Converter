@@ -1,3 +1,5 @@
+import {sha256 as hash} from "./hash.mjs";
+import {ONLINE_ROOT,mediaUrl} from "./source.mjs";
 import {loadArtwork,artworkKey} from "./artwork-source.mjs";
 import {findSupplement} from "./library-source.mjs";
 import {referenceIcons,resolveIcon,validImageSignature} from "./image-resolver.mjs";
@@ -17,7 +19,7 @@ export function imageSource(value){
   let decoded;try{decoded=decodeURIComponent(path);}catch{return null;}
   return decoded.split("/").some(p=>p==="..")||/[\x00-\x1f]/.test(path)?null:path;
 }
-async function hash(value){return [...new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(value)))].map(n=>n.toString(16).padStart(2,"0")).join("");}
+
 function href(image,root){
   const value=image?.href??image;
   if(typeof value==="string")return imageSource(value);
@@ -31,7 +33,7 @@ function nativeType(kind,doc){return doc?.type??({race:"race",background:"backgr
 export class AssetImporter{
   constructor(content,index,report,onProgress=()=>{}){
     this.content=content;this.index=index;this.report=report;this.onProgress=onProgress;this.files=new Set();this.pending=new Map();this.used=new Set();this.initialFiles=new Set();this.reusedFiles=new Set();this.transportFailures=new Map();this.catalog=[];this.matches=new Map();this.artwork=new Map();this.refs=new Map(index.all.map(e=>[e.uuid,e]));
-    this.root=game.settings.get(ID,"artworkSource")||"bcc/5etools/img";
+    const custom=game.settings.get(ID,"artworkSource");this.root=content.sourceContext?.mode==="online"?(typeof custom==="string"&&/^https?:/.test(custom)?custom:`${ONLINE_ROOT}img/`):(custom||"bcc/5etools/img");
     report.assets={root:ASSET_ROOT,copied:0,reused:0,fields:0,fallbacks:0,failures:[],matches:0,ambiguous:[],unresolved:[],coverage:{},providers:{}};
     this.stats=report.assets;
   }
@@ -97,23 +99,24 @@ export class AssetImporter{
     const fallback=FALLBACK[kind==="item"?doc.type:kind]??FALLBACK[doc.type]??"icons/svg/item-bag.svg";
     out.push({source:fallback,via:"category"},{source:"icons/svg/item-bag.svg",via:"category"});
     const seen=new Set();
-    return out.map(e=>({...e,source:imageSource(e.source)})).filter(e=>{if(!e.source||seen.has(e.source))return false;seen.add(e.source);return true;});
+    return out.map(e=>({...e,source:imageSource(this.content.sourceContext?.mode==="online"?mediaUrl(e.source):e.source)})).filter(e=>{if(!e.source||seen.has(e.source))return false;seen.add(e.source);return true;});
   }
   async copy(raw){
-    const source=imageSource(raw);if(!source)throw Error("Invalid image path");
+    const source=imageSource(this.content.sourceContext?.mode==="online"?mediaUrl(raw):raw);if(!source)throw Error("Invalid image path");
     if(this.pending.has(source))return this.pending.get(source);
     const task=this._copy(source);this.pending.set(source,task);return task;
   }
   reuse(path){if(this.initialFiles.has(path))this.reusedFiles.add(path);this.stats.reused=this.reusedFiles.size;}
   async _copy(source){
     if(source.startsWith(`${ASSET_ROOT}/`)&&this.files.has(source)){this.reuse(source);return {path:source,source,reused:true};}
-    const key=await hash(source),prefix=`${ASSET_ROOT}/${key}.`,known=[...this.files].find(p=>p.startsWith(prefix));
-    if(known){this.reuse(known);return {path:known,source,reused:true};}
+    let key=await hash(source);const prefix=`${ASSET_ROOT}/${key}.`,known=[...this.files].find(p=>p.startsWith(prefix));
+    const refreshRemote=this.content.sourceContext?.mode==="online"&&/^https?:/.test(source);
+    if(known&&!refreshRemote){this.reuse(known);return {path:known,source,reused:true};}
     const url=/^https?:\/\//i.test(source)?source:(foundry.utils.getRoute?.(source)??source);
     const remote=/^https?:\/\//i.test(source),origin=remote?new URL(source).origin:null;
     if(remote&&(this.transportFailures.get(origin)??0)>=3)throw Error("Remote image provider unavailable after three transport failures");
     let response;
-    try{response=await fetch(url,{signal:AbortSignal.timeout(12000),credentials:remote?"omit":"same-origin"});}
+    try{response=await fetch(url,{signal:AbortSignal.timeout(12000),credentials:remote?"omit":"same-origin",cache:"no-cache"});}
     catch(error){if(remote)this.transportFailures.set(origin,(this.transportFailures.get(origin)??0)+1);throw error;}
     if(!response.ok)throw Error(`HTTP ${response.status}`);
     const blob=await response.blob(),mime=blob.type.split(";")[0].toLowerCase();
@@ -122,6 +125,7 @@ export class AssetImporter{
     const header=new Uint8Array(await blob.slice(0,1024).arrayBuffer());
     const valid=validImageSignature(ext,header);
     if(!valid)throw Error("Invalid image signature");
+    if(refreshRemote){key=await hash(await blob.arrayBuffer());const cached=`${ASSET_ROOT}/${key}.${ext}`;if(this.files.has(cached)){this.reuse(cached);return {path:cached,source,reused:true};}}
     const file=new File([blob],`${key}.${ext}`,{type:TYPES[ext]}),expected=`${ASSET_ROOT}/${file.name}`;
     const result=await this.picker.upload("data",ASSET_ROOT,file,{}, {notify:false});
     if(result?.error||result?.status==="error")throw Error(result.error??"Upload failed");

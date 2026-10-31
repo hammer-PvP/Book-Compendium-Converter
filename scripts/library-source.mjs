@@ -4,7 +4,7 @@ import {parseSpellFilter,matchesSpellMetadata} from "./spell-filter.mjs";
 import {equipmentCategoryPool} from "./equipment.mjs";
 import {attachedSpellRecipes} from "./item-spells.mjs";
 import {createdResources} from "./created-resources.mjs";
-import {readJson, getBooks} from "./source.mjs";
+import {getBooks, createSourceSession} from "./source.mjs";
 import {canonical as canon, clone, merge, identity, prepareRecords, attachSubraces, DEFAULT_SOURCES} from "./data-model.mjs";
 const KINDS = ["race", "background", "feat", "item", "optionalfeature", "class", "subclass", "classFeature", "subclassFeature", "spell", "monster", "object", "vehicle"];
 export function findSupplement(kind, record, foundry) {
@@ -36,8 +36,9 @@ function matchesRequirements(record, conditions) {
       : Array.isArray(actual) ? actual.includes(expected) : actual === expected;
   });
 }
-export async function readLibraryBook(id) {
-  let sourceId = String(id).trim(); const books = await getBooks();
+export async function readLibraryBook(id, options = {}) {
+  const session=options.session??createSourceSession(),readJson=session.readJson;session.onProgress=options.onProgress;
+  let sourceId = String(id).trim(); const books = await getBooks({session});
   const book = books.find(b => canon(b.id) === canon(sourceId));
   if (!book) throw Error(`Livro não encontrado no catálogo: ${sourceId}`);
   sourceId=book.id;
@@ -46,7 +47,7 @@ export async function readLibraryBook(id) {
   const data = Object.fromEntries(await Promise.all(paths.map(async p => [p, await readJson(p, {optional: true})])));
   const raw = Object.fromEntries(KINDS.map(k => [k, []])), issues = [],sourceRules=new Map();
   const ruleOf=r=>r.edition==="one"||r.srd52||r.basicRules2024?"2024":r.edition==="classic"||r.srd||r.basicRules?"2014":null;
-  for(const path of [...paths.slice(0,10),`book/book-${canon(sourceId)}.json`])if(!data[path])issues.push({category:"source",name:path,source:sourceId,message:"Local data file unavailable; related coverage is incomplete"});
+  for(const path of [...paths.slice(0,10),`book/book-${canon(sourceId)}.json`])if(!data[path])issues.push({category:"source",name:path,source:sourceId,message:"Source data file unavailable; related coverage is incomplete"});
   const addData = d => {for(const kind of KINDS)for(const r of d?.[kind]??[]){raw[kind].push(r);const rule=ruleOf(r);if(rule&&(rule==="2024"||!sourceRules.has(canon(r.source))))sourceRules.set(canon(r.source),rule);}};
   for (const path of paths.slice(0, 9)) addData(data[path]);
   raw.item.push(...(data["items-base.json"]?.baseitem ?? []).map(r=>({...r,_bccBaseEquipment:true})));
@@ -235,7 +236,7 @@ export async function readLibraryBook(id) {
   const records = Object.fromEntries(KINDS.map(kind => [kind, [...selected.values()].filter(x => x.kind === kind).map(x => x.record)]));
   for(const rows of Object.values(records))for(const r of rows)r._bccRules=(r.classSource?sourceRules.get(canon(r.classSource)):null)??ruleOf(r)??sourceRules.get(canon(r.source))??null;
   const chapters = volume?.bookData?.find(e => canon(e.id) === canon(sourceId))?.data ?? [];
-  return {book, sourceId, chapters, records, foundry, spellLookup: lookup,proficiencyItems:Object.fromEntries(catalog("item").map(r=>[canon(r.name).replace(/[^a-z0-9]/g,""),{name:r.name,type:r.type,weaponCategory:r.weaponCategory,property:r.property??[],source:r.source}])),
+  return {book, sourceId, chapters, records, foundry, sourceContext:{token:session.token,...session.metadata}, spellLookup: lookup,proficiencyItems:Object.fromEntries(catalog("item").map(r=>[canon(r.name).replace(/[^a-z0-9]/g,""),{name:r.name,type:r.type,weaponCategory:r.weaponCategory,property:r.property??[],source:r.source}])),
     preparationIssues: [...new Map(issues.filter(i=>canon(i.source)===canon(sourceId)||[...selected.values()].some(e=>e.kind===i.category&&canon(e.record.name)===canon(i.name)&&canon(e.record.source)===canon(i.source))).map(i => [JSON.stringify(i), i])).values()],
     dependencyReasons:[...selected.values()].filter(e=>e.record._bccDependency).map(e=>({kind:e.kind,name:e.record.name,source:e.record.source,reasons:e.record._bccDependencyReasons})),
     dependencies: Object.fromEntries(KINDS.map(k => [k, records[k].filter(r => r._bccDependency).length])),

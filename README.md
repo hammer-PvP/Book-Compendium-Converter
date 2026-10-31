@@ -1,26 +1,44 @@
-# Book Compendium Converter — 0.0.11 experimental
+# Book Compendium Converter — 0.1.0 experimental
 
-A local book importer targeting **Foundry VTT 14.369 / D&D5e 6.0.6**.
+An online book importer and content-module exporter targeting **Foundry VTT 14.369 / D&D5e 6.0.6**.
 This build expands native world-compendium generation. **Foundry and Character
 Builder end-to-end validation is still pending.**
 
 Source: https://github.com/hammer-PvP/Book-Compendium-Converter
 
-## Install and local source data
+## Install and start
 
-Extract the module ZIP into `FoundryVTT/Data/modules/book-compendium-converter/`
-so that `module.json` is directly inside that directory. Enable BCC in a GM test
-world.
+Install BCC in **Foundry VTT 14.369 / D&D5e 6.0.6**, enable it in a GM test
+world, then open **Book Compendium Converter** in the Compendiums sidebar.
+The default **5etools online** source reads current JSON and artwork from
+`https://cdn.5e.tools/2024/`. No Plutonium, local 5etools release, manually
+downloaded image collection or separate server is required. Internet access
+is required to analyze and import online content.
 
-Separately extract the contents of your own 5etools data release into
-`FoundryVTT/Data/bcc/5etools/`. Confirm that
-`Data/bcc/5etools/data/books.json` exists, without an extra release-version
-directory. The development reference for this build was 5etools 2.39.0.
+Resolved artwork is saved automatically through Foundry's native file API under
+`Data/assets/srd5e/`. Online artwork is checked again on later imports and reused
+by its actual byte hash when unchanged. Imported documents and exported content
+modules use these saved files rather than depending on the provider at play time.
+
+The **Atualizar catálogo** button refreshes the book catalog. Each analysis uses
+a fresh data session; its JSON files are cached within that session and returned
+as independent copies. The import report records source URLs, timestamps and
+SHA-256 hashes of the files actually read. The live CDN is not an immutable
+release archive; these fingerprints identify the consumed data without claiming
+an atomic snapshot of a numbered upstream release.
+
+For an existing local setup, select **5etools local (opcional)** in BCC's
+**Fonte de dados** setting. That mode still reads
+`FoundryVTT/Data/bcc/5etools/data/books.json` and the corresponding data tree.
+Its default artwork root is `bcc/5etools/img`; an optional image-root override
+is available. The local conversion fixtures used for regression testing were
+5etools 2.39.0. Local mode is optional and does not configure the online mode.
 
 BCC ships no book text, artwork, mechanical source records, Plutonium code, or 5etools code.
 The image-only association catalog contains names, identifiers and core icon paths;
 it is compiled from supplied native image metadata and Plutonium icon mappings.
-It does not require Plutonium, web services, AI inference, or online SRD lookups.
+The association catalog requires no Plutonium or AI inference. Online imports
+use the 5etools CDN; native system mechanics are not fetched from online SRDs.
 All conversion code is original to BCC. Native system enum labels may be read
 locally to match tool and weapon proficiency keys; their item mechanics are not
 used as conversion fallbacks.
@@ -89,6 +107,52 @@ Validation freezes a read-only snapshot, including the checked media bytes.
 Changes made after validation require validating again to include them. Export
 does not synchronize existing character inventories. Export one or several
 books per package; this version limits selected media to 512 MiB.
+
+## 0.1.0 changes
+
+- Online JSON and artwork are the default. Fresh installations need only BCC,
+  Foundry/D&D5e and internet access. Source failures include the affected path;
+  malformed online data is rejected rather than silently used as partial JSON.
+- SHA-256 uses WebCrypto where available and a matching fallback otherwise.
+  Deterministic IDs and fingerprints remain the same on HTTP remote sessions,
+  avoiding the localhost-only dependency on `crypto.subtle`.
+- Source `packContents` becomes native containers with separate, linked Item
+  instances. Starting equipment links the complete bundle. Shared components
+  have independent IDs in each pack. The grouping container contributes only
+  any unallocated declared source weight; physical components are not counted
+  twice. The package purchase price and component catalog prices are preserved
+  separately as source data. Literal components without standalone statistics
+  keep their supplied names/quantities and are reported for review.
+- Native container acquisitions with multiple units become independent trees,
+  including when a consumer sets the count in `createWithContents`.
+- Structured prerequisites are compiled to a versioned logical expression.
+  Spell references and filters, class/character levels, ability conditions and
+  alternatives are evaluated from data. Unknown conditions remain explicit
+  review items and cannot silently enable a choice. No feature-name exception
+  produces the eligibility result.
+- An optional adapter connects the provided Character Builder Level Up service
+  to that evaluator. It evaluates owned and projected spell acquisitions before
+  commit; damage, attack, range and acquisition-class requirements remain in
+  effect. The adapter does not modify or bundle Character Builder source code.
+- Exported modules include the original standalone prerequisite/container
+  support, with no BCC dependency. Container parent IDs and cycles are checked
+  during export validation.
+
+Reimport/rebuild affected books to regenerate their data. Existing Actor
+inventories are not synchronized. Rebuild replaces matching imported documents,
+including manual edits; keep those edits in an exported snapshot when needed.
+The preserved **v0.0.11** tag and release assets remain the last local-first
+baseline. Installing an older module does not roll back a World's documents.
+
+Validation includes complete XPHB/EFA/TCE conversion-to-export graphs and native
+LevelDB reads, source-derived prerequisite positive/negative cases and projected
+Level Up inputs, nested container cloning, unchanged ID/fingerprint tests, UI
+DOM behavior and prior mechanics/persistence regressions. Live CDN tests read
+XPHB and EFA with no local source data or images and validate artwork bytes;
+Foundry's upload API is mocked in that test. End-to-end Foundry/Character Builder
+interaction still requires live testing. Conversion reports may retain genuine
+source gaps and unsupported mechanics; this release does not claim full rules
+coverage for every publication.
 
 ## 0.0.11 changes
 

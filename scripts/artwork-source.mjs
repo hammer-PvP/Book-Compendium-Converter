@@ -1,8 +1,9 @@
-import {readJson} from "./source.mjs";
+import {getSourceSession} from "./source.mjs";
 import {canonical,clone} from "./data-model.mjs";
 export const artworkKey=(kind,r)=>[kind,r.source,r.name,r.className??"",r.classSource??"",r.subclassShortName??r.shortName??"",r.raceName??""].map(canonical).join("|");
 /** Read image metadata from the supplied local data, without importing extra entities. */
 export async function loadArtwork(content){
+  const readJson=getSourceSession(content).readJson;
   const files=new Set(["fluff-items.json","fluff-races.json","fluff-backgrounds.json","fluff-feats.json","fluff-optionalfeatures.json"]);
   for(const [folder,kinds] of [["class",["class","subclass"]],["spells",["spell"]],["bestiary",["monster"]]]){
     const index=await readJson(`${folder}/fluff-index.json`,{optional:true})??{};

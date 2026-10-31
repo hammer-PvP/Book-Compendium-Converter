@@ -1,3 +1,6 @@
+import {compilePrerequisites,spellMetadata,unsupportedPrerequisites} from "./prerequisites.mjs";
+import {stableId as idFor} from "./hash.mjs";
+import {materializeBundles,applyBundleData} from "./bundles.mjs";
 import {entitlementEffects} from "./grant-policy.mjs";
 import {addPassiveEffects} from "./passive-effects.mjs";
 import {applyRulesAdvancements} from "./rules-policy.mjs";
@@ -50,10 +53,6 @@ const CLEAN_TAGS = /\{@([\w-]+)\s+([^{}]+)\}/g;
 const safe = v => String(v ?? "").replace(/[&<>"']/g, x => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[x]);
 const slug = str => String(str).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 65);
 const canon = value => String(value ?? "").trim().toLowerCase();
-async function idFor(text) {
-  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return [...new Uint8Array(hash)].slice(0, 8).map(v => v.toString(16).padStart(2,"0")).join("");
-}
 function entityKey(category, r) {
   return [category, r.source, r.name, r.className ?? "", r.classSource ?? "",
     r.subclassShortName ?? r.shortName ?? "", r.subclassSource ?? "", r.level ?? "", r.raceName ?? ""].map(canon).join("|");
@@ -107,7 +106,8 @@ export async function buildIndex(content, destination = WORLD_DESTINATION) {
       byShort.get(shortKey).push(item);
     }
   }
-  return {records, byKey, byShort, packKeys, destination, proficiencyItems:content.proficiencyItems??{}, spellLookup:content.spellLookup, all:[...byKey.values()].filter(e=>!e.virtual)};
+  const index={records, byKey, byShort, packKeys, destination, proficiencyItems:content.proficiencyItems??{}, spellLookup:content.spellLookup, all:[...byKey.values()].filter(e=>!e.virtual)};
+  await materializeBundles(index,lookupUid);return index;
 }
 function locate(index, kind, name, source) {
   const all = index.byShort.get(`${kind}|${canon(source)}|${canon(name)}`) ?? [];
@@ -560,12 +560,14 @@ export async function convertOne(entry,index,content,report){
   const base={_id,name:record.name,sort:kind==="chapter" ? Number(record.sequence??0)*10000 : 0,flags:originFlags(kind,record,content.sourceId)};
   if(kind==="subclass"&&(index.byShort.get(`${kind}|${canon(record.source)}|${canon(record.name)}`)?.length??0)>1)
     base.name=`${record.name} (${record._bccRules??record.classSource})`;
-  base.flags.bcc.converterVersion="0.0.11";
+  base.flags.bcc.converterVersion="0.1.0";
   base.flags.bcc.targetRules=content.targetRules??"source";
   base.flags.bcc.sourceRules=record.edition??record._bccRules??null;
   base.flags.bcc.dependency=!!record._bccDependency;
   if(record._bccDependencyReasons?.length)base.flags.bcc.dependencyReasons=clone(record._bccDependencyReasons);
-  if(record.prerequisite)base.flags.bcc.prerequisites=clone(record.prerequisite);
+  if(record.prerequisite){base.flags.bcc.prerequisites=clone(record.prerequisite);base.flags.bcc.prerequisiteExpression=compilePrerequisites(record);for(const issue of unsupportedPrerequisites(base.flags.bcc.prerequisiteExpression))report.incomplete.add(`${record.name}: ${issue}`);}
+  if(kind==="spell")base.flags.bcc.spellMetadata=spellMetadata(record,index);
+  if(kind==="race")base.flags.bcc.speciesIdentifiers=[...new Set([record.name,record._bccVariantOf?.name,record.raceName,record._baseName].filter(Boolean).map(slug))];
   if(record._bccSpellReplacements)base.flags.bcc.spellReplacements=clone(record._bccSpellReplacements);
   if(kind==="chapter"){
     return {...base,pages:[{_id:"bccChapterPage01",name:record.name,type:"text",sort:0,text:{content:renderEntries(record.chapter,index,record.source,report)}}]};
@@ -647,6 +649,7 @@ export async function convertOne(entry,index,content,report){
     spellSynthesisIssues=synthesized.issues;
   } else if(kind==="item"){
     buildEquipment(record,sys,report);
+    applyBundleData(record,sys,base.flags.bcc,report,index);
     if(record._bccCreatedResource){
       base.flags.bcc.createdResource=clone(record._bccCreatedResource);
       if(record.foundryType==="weapon")sys.type={value:"",baseItem:""};
@@ -732,7 +735,7 @@ export async function convertOne(entry,index,content,report){
   if(kind==="spell" && !Object.keys(sys.activities??{}).length)report.incomplete.add(`${record.name}: spell has no native Activity`);
   return {...base,type:documentType,system:sys,...effects.length?{effects}:{} };
 }
-export function createReport(content){return {dependencyReasons:content.dependencyReasons??[],information:new Set(),preparationWarnings:[],dependencies:content.dependencies??{},preparationIssues:content.preparationIssues??[],sourceId:content.sourceId,counts:{...content.counts},
+export function createReport(content){return {sourceContext:content.sourceContext,dependencyReasons:content.dependencyReasons??[],information:new Set(),preparationWarnings:[],dependencies:content.dependencies??{},preparationIssues:content.preparationIssues??[],sourceId:content.sourceId,counts:{...content.counts},
   created:{},updated:{},existing:{},errors:[],warnings:[],validationFailures:[],unresolved:new Set(),incomplete:new Set((content.preparationIssues??[]).map(i=>`${i.category} / ${i.name}: ${i.message}`)),unlocalizedImages:new Set()};}
 export function finalizeReport(report){return {...report,information:[...report.information],unresolved:[...report.unresolved],incomplete:[...report.incomplete],unlocalizedImages:[...report.unlocalizedImages],
   generatedAt:new Date().toISOString()};}

@@ -20,7 +20,7 @@ export function equipmentCategoryPool(records, category, owner) {
     const allowed=(owner._bccEquipmentSources??[owner.source]).map(lc);
     if(!allowed.includes(lc(r.source))&&!(r.otherSources??[]).some(s=>allowed.includes(lc(s.source))))continue;
     const code=String(r.type??"").split("|")[0];
-    if(r._bccIsGroup||r.reqAttune||r.bonusWeapon||r.bonusAc||r._bccBaseItem||r.rarity&&!["none","unknown"].includes(lc(r.rarity)))continue;
+    if(r._bccBundleInstance||r._bccIsGroup||r.reqAttune||r.bonusWeapon||r.bonusAc||r._bccBaseItem||r.rarity&&!["none","unknown"].includes(lc(r.rarity)))continue;
     const match=native[0]==="weapon"?["M","R"].includes(code)&&r.weaponCategory===(native[1].startsWith("sim")?"simple":"martial")&&(!native[1].endsWith("M")||code==="M"):
       native[0]==="tool"?({AT:"art",GS:"game",INS:"music"}[code]===native[1]):lc(r.scfType)===(native[1]==="druidic"?"druid":native[1]);
     if(!match)continue;
@@ -29,6 +29,7 @@ export function equipmentCategoryPool(records, category, owner) {
   return [...names.values()].sort((a,b)=>a.name.localeCompare(b.name));
 }
 export function itemType(r) {
+  if(r.packContents?.length)return "container";
   const type = String(r.type ?? "").split("|")[0].toUpperCase();
   if (["M","R"].includes(type)) return "weapon";
   if (["LA","MA","HA","S","SCF","RD","WD","RG","W"].includes(type)) return "equipment";
@@ -116,7 +117,7 @@ export function buildStartingEquipment(record, index, lookup, report) {
       const ref = lookup(index,"item",value.item,record.source);
       if (!ref) {report.unresolved.add(`${record.name}: starting equipment ${value.item}`);return;}
       if (ancestry.has(ref.key)) {report.incomplete.add(`${record.name}: circular equipment group ${value.item}`);return;}
-      if (ref.record._bccGroupItems || ref.record.packContents) {
+      if (ref.record._bccGroupItems) {
         ancestry.add(ref.key);
         const g = add(ref.record._bccGroupItems ? "OR" : "AND",group);
         const count = Number(value.quantity ?? 1);
