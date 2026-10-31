@@ -1,3 +1,4 @@
+import {spellChoicePolicy} from "./grant-policy.mjs";
 import {canonical as lc} from "./data-model.mjs";
 import {parseSpellFilter,matchesSpellMetadata} from "./spell-filter.mjs";
 export function preferredCandidates(refs,owner={}){
@@ -28,11 +29,13 @@ export function expandedSpellPool(record,index,classPool,lookup,report) {
   return [...out.values()];
 }
 /** Preserve each recipe's level, ability and frequency instead of merging unrelated choices. */
-export function addSpellRecipes(record,index,adv,report,{add,lookup,classPool,choiceConfig,choiceAdv}) {
-  if (!record.additionalSpells?.length) return;
+export function addSpellRecipes(record,index,adv,report,{add,lookup,classPool,choiceConfig,choiceAdv,overlay,kind}) {
+  const decisions=[],nativeChoices=new Map();
+  const levelFor=value=>!["class","subclass","race"].includes(kind)&&Number(value)<=Number(record._bccGrantLevel??record.level??1)?0:Number(value);
+  if (!record.additionalSpells?.length) return decisions;
   if (record._bccAdditionalOptions?.length) {
     const pool = record._bccAdditionalOptions.map(name => lookup(index,"optionalfeature",`${name}|${record.source}`,record.source)).filter(Boolean);
-    add(adv,choiceAdv("Choose Spellcasting Option",0,choiceConfig(pool,{"0":{count:1,replacement:false}},"feat"),{kind:"additionalSpellVariants"}));return;
+    add(adv,choiceAdv("Choose Spellcasting Option",0,choiceConfig(pool,{"0":{count:1,replacement:false}},"feat"),{kind:"additionalSpellVariants"}));return decisions;
   }
   for (const block of record.additionalSpells) {
     const ability = typeof block.ability === "string" ? [block.ability] : block.ability?.choose ?? [];
@@ -43,12 +46,16 @@ export function addSpellRecipes(record,index,adv,report,{add,lookup,classPool,ch
         if (!ref) {report.unresolved.add(`${record.name}: additional spell ${uid}`);return;}
         if (context.mode === "expanded") return;
         const spell = {ability,method:context.mode === "innate" ? "innate" : "spell",prepared:2,uses:{max:context.count ? String(context.count) : "",per:context.period ?? "",requireSlot:false}};
-        add(adv,{type:"ItemGrant",name:`${block.name ?? "Additional Spell"}: ${ref.record.name}`,level:context.level,configuration:{items:[{uuid:ref.uuid,optional:false,sort:0}],optional:false,sorting:"m",spell},value:{}});return;
+        const policy=spellChoicePolicy(record,null,context,overlay);
+        if(policy.representation==="deferred"){decisions.push({...policy,mode:context.mode,level:context.level,count:1,pool:[ref.uuid],spell});report.information.add(`${record.name}: ${policy.reason}`);return;}
+        add(adv,{type:"ItemGrant",name:`${block.name ?? "Additional Spell"}: ${ref.record.name}`,level:levelFor(context.level),configuration:{items:[{uuid:ref.uuid,optional:false,sort:0}],optional:false,sorting:"m",spell},value:{}});return;
       }
       if (!value || typeof value !== "object") return;
       if(context.mode==="expanded")return;
       if(value.all){for(const ref of filterSpellPool(value.all,index,record,classPool,report))visit(`${ref.record.name}|${ref.record.source}`,context);return;}
       if (value.choose) {
+        const count=Number(value.count??value.choose?.count??1),policy=spellChoicePolicy(record,value.choose,{...context,count},overlay);
+        if(policy.warning)report.incomplete.add(`${record.name}: ${policy.warning}`);
         let pool = [], level = null;
         if (typeof value.choose === "string") {
           const filter = value.choose;
@@ -58,8 +65,16 @@ export function addSpellRecipes(record,index,adv,report,{add,lookup,classPool,ch
         } else if (Array.isArray(value.choose.from)) pool = value.choose.from.map(uid => lookup(index,"spell",uid,record.source)).filter(Boolean);
         if (!pool.length) {report.unresolved.add(`${record.name}: empty additional-spell choice`);return;}
         const spell = {ability,method:context.mode === "innate" ? "innate" : "spell",prepared:2,uses:{max:context.count ? String(context.count) : "",per:context.period ?? "",requireSlot:false}};
-        const config = choiceConfig(pool,{[context.level]:{count:Number(value.count ?? value.choose?.count ?? 1),replacement:false}},"spell",{type:"",subtype:"",level:level == null ? "" : String(level),list:[],school:[]},spell);
-        add(adv,choiceAdv(block.name ?? "Choose Additional Spell",context.level,config,{kind:"additionalSpells",mode:context.mode}));return;
+        if(policy.representation!=="native"){
+          decisions.push({...policy,mode:context.mode,level:context.level,count,filter:typeof value.choose==="string"?value.choose:null,pool:pool.map(e=>e.uuid),spell});
+          report.information.add(`${record.name}: ${policy.reason}`);return;
+        }
+        const grantLevel=levelFor(context.level);
+        const config = choiceConfig(pool,{[grantLevel]:{count,replacement:false}},"spell",{type:"",subtype:"",level:level == null ? "" : String(level),list:[],school:[]},spell);
+        const name=block.name??"Choose Additional Spell",signature=JSON.stringify([name,context.mode,{...config,choices:undefined}]);
+        const prior=nativeChoices.get(signature);
+        if(prior){const row=prior.configuration.choices[grantLevel]??={count:0,replacement:false};row.count+=count;prior.level=Math.min(prior.level,grantLevel);}
+        else nativeChoices.set(signature,choiceAdv(name,grantLevel,config,{kind:"additionalSpells",mode:context.mode}));return;
       }
       for (const [key,child] of Object.entries(value)) {
         if (/^(?:daily|rest|weekly|resource|limited)$/.test(key)) {
@@ -74,4 +89,6 @@ export function addSpellRecipes(record,index,adv,report,{add,lookup,classPool,ch
     }
     for (const mode of ["known","prepared","innate","expanded"]) if (block[mode]) visit(block[mode],{mode,level:0});
   }
+  for(const choice of nativeChoices.values())add(adv,choice);
+  return decisions;
 }

@@ -1,6 +1,6 @@
-# Book Compendium Converter — 0.0.7 experimental
+# Book Compendium Converter — 0.0.8 experimental
 
-An offline book importer targeting **Foundry VTT 14.369 / D&D5e 6.0.6**.
+A local book importer targeting **Foundry VTT 14.369 / D&D5e 6.0.6**.
 This build expands native world-compendium generation. **Foundry and Character
 Builder end-to-end validation is still pending.**
 
@@ -56,6 +56,63 @@ For comparison with older versions, use a **fresh test world**. Rebuild updates 
 in the current conversion graph; it does not delete obsolete documents left by
 older conversions. Reload the world after rebuilding to refresh native spell
 list contributions.
+
+## 0.0.8 changes
+
+- Native Item and Actor icons are resolved from explicit source image metadata,
+  matching installed compendium index entries, supplied local artwork metadata,
+  and native type/school/category fallbacks. Only image metadata is reused;
+  mechanics continue to come from the selected local source data.
+- Images are copied into **FoundryVTT/Data/assets/srd5e/** using the native
+  FilePicker API. Documents store **assets/srd5e/** paths. A deterministic
+  SHA-256 filename derived from the image origin permits reuse across imports,
+  books and worlds without downloading the original again. Existing asset files
+  and originals are preserved.
+- Coverage includes Items, Actor portraits, embedded Items, Activity and effect
+  images, and explicit token images (with portrait fallback). Source matching
+  uses type, identifier/name, source, rules and available class context; ambiguous
+  matches fall back rather than selecting an arbitrary image.
+- Image payload types/signatures, upload responses and persisted paths are
+  checked. The progress bar covers image work, and the JSON report includes
+  copied/reused files, fallback fields, unavailable sources and ambiguities.
+- Localized fields retain provenance under `flags.bcc.assets`. The collection
+  helper produces paths and `assets/<filename>` destinations for a future
+  module exporter. The exporter itself remains a later development phase.
+- Additional spell recipes now share one source-driven timing policy. Choices
+  tied explicitly to a resource conjured after rest are retained as deferred
+  data, without adding acquisition ItemChoices. This removes the extra native
+  queue for Pact of the Tome while allowing Character Builder's own flow.
+- Additional class cantrips represented by native derived scales use transfer
+  effects instead of a second spell selector. This covers the source patterns
+  used by Thaumaturge and Magician without branches for those names. Existing
+  scale effects take precedence; conflicting values remain reported.
+- Equivalent native spell choices share their progression buckets. Feat/feature
+  acquisition choices use level 0, while later thresholds remain intact. Native
+  choices such as Magic Initiate, Fey-Touched and Ritual Caster are preserved.
+
+### Artwork source and reuse
+
+The destination is fixed at `Data/assets/srd5e`; it is shared rather than nested
+inside a particular world. Installable module ZIPs contain no artwork.
+
+Installed system/module icons can be copied immediately. For illustrations
+referenced by 5etools data, supply the corresponding image files separately at
+`Data/bcc/5etools/img/`, or set **Source artwork directory or URL** in the BCC
+module settings to the appropriate image root. Remote origins require browser
+access/CORS support; unavailable images fall back to installed/native icons.
+Three transport failures suspend that remote provider for the current import.
+
+Re-import with **Update unchanged BCC** or **Rebuild** to apply images to existing
+BCC documents. **Add missing** preserves existing documents. Updating the module
+alone does not change existing documents or actors. Rebuild replaces matching
+BCC document data, including local changes, and still does not prune obsolete
+records. Reimports reuse saved files when the same source image is encountered.
+
+Deferred choices retain their counts, pools, spell configuration and timing as
+data. BCC does not supply a universal rest-choice UI; consumers still need to
+handle the corresponding mechanic. Genuine native Advancement choices remain
+interactive where required. Full Journal illustration/layout import is outside
+this icon patch.
 
 ## 0.0.7 changes
 
@@ -143,9 +200,9 @@ BCC. The generated world output is not yet a standalone distributable module.
 
 Development checks exercise source contracts, document blueprints, dependency
 graphs and a mocked persistence transport. They do **not** execute Foundry's
-native DataModels, Character Builder workflows, combat rolls or rest recovery.
+native DataModels, Character Builder workflows, combat rolls or rest recovery. Image tests use mocked file/index transports, not a live Foundry server.
 The importer performs native schema preflight when run inside Foundry.
-For 0.0.7, static generation covered XPHB, Eberron: Forge of the Artificer,
+For 0.0.8, static generation covered XPHB, Eberron: Forge of the Artificer,
 Arcana Unleashed and Tasha's Cauldron of Everything. Regression checks also
 covered Goliath ancestry, later species grants, Blight, equipment, NPC embedded
 features, cross-book scope, class-domain scales, deletion guards, preparation
@@ -163,7 +220,7 @@ or Character Builder certification.
   may require manual work. Ambiguous damage is not automatically summed.
 - Native supplements take priority over inferred activities. A supplement can
   still leave source mechanics incomplete; such cases are reported.
-- Full image localization, token artwork, complete book-layout reproduction,
+- Full Journal illustration/layout reproduction, implicit token lookup,
   every copy/modification mode and every supplement are not guaranteed.
 - Books represented only by unstructured prose cannot automatically become
   complete mechanical records. Missing structured data is reported.
