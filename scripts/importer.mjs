@@ -1,3 +1,4 @@
+import {AssetImporter} from "./assets.mjs";
 import {organizeDocuments} from "./organization.mjs";
 import {contentHash, auditReferences} from "./integrity.mjs";
 import {saveSpellLists} from "./spell-lists.mjs";
@@ -159,11 +160,13 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
   if(game.system.id!=="dnd5e")throw new Error("A versão inicial requer o sistema dnd5e.");
   const index=await buildIndex(content);
   const report=createReport(content);
+  const assets=new AssetImporter(content,index,report,text=>onProgress(text,{phase:"assets",completed:0,total:index.all.length,percent:0}));
+  await assets.prepare();
   const folder=await getFolder(content.book);
   report.folderId=folder.id;
-  let processed=0,completed=0;
+  let processed=0,imaged=0,completed=0;
   const total=index.all.length;
-  const progress=(phase,count,message)=>onProgress(message,{phase,completed:count,total,percent:Math.min(99,Math.floor((processed+completed)/(Math.max(1,total)*2+1)*100))});
+  const progress=(phase,count,message)=>onProgress(message,{phase,completed:count,total,percent:Math.min(99,Math.floor((processed+imaged+completed)/(Math.max(1,total)*3+1)*100))});
   // Persist target Actors and Spells before Activities that reference them.
   const order=["monster","object","vehicle","spell","item","raceFeature","classFeature",
     "subclassFeature","optionalfeature","feat","race","background","subclass","class","spellList","chapter"];
@@ -178,6 +181,12 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
       catch(e){report.errors.push(`${kind} / ${entry.record.name}: conversão — ${e.message}`);}
       processed++;if(processed%20===0){progress("convert",completed,`${LABELS[kind]}: convertendo ${processed}/${total}...`);await pause(0);}
     }
+    for(const doc of docs){
+      const entry=entries.find(e=>e._id===doc._id);
+      progress("assets",completed,`Ícones: ${doc.name} · ${assets.stats.copied} copiados / ${assets.stats.reused} reutilizados...`);
+      await assets.apply(doc,entry);imaged++;
+      if(imaged%10===0)await pause(0);
+    }
     auditReferences(docs,index,report);
     await organizeDocuments(pack,docs,entries,index);
     progress("write",completed,`${LABELS[kind]}: gravando e conferindo ${docs.length} documentos...`);
@@ -186,6 +195,8 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
     completed=before+entries.length;
   }
   progress("verify",completed,"Conferindo listas de magias e finalizando relatório...");
+  await assets.verify();
+  for(const missing of report.assets.unresolved)report.incomplete.add(`Image unavailable: ${missing}`);
   const verifiedLists=[];
   for(const entry of index.all.filter(e=>e.kind==="spellList")){
     if(report.validationFailures.some(f=>f.id===entry._id))continue;

@@ -1,3 +1,4 @@
+import {entitlementEffects} from "./grant-policy.mjs";
 import {buildActor} from "./actors.mjs";
 import {prepareNativeKeys} from "./native-keys.mjs";
 import {addItemSpellActivities} from "./item-spells.mjs";
@@ -78,7 +79,7 @@ export async function buildIndex(content, destination = WORLD_DESTINATION) {
   for(const [kind,rows] of Object.entries(records))if(kind!=="spellList")for(const record of rows){
     if((record.additionalSpells?.length??0)>1){
       record._bccAdditionalOptions=record.additionalSpells.map((block,i)=>`${record.name}: ${block.name??`Spellcasting Option ${i+1}`}`);
-      for(const [i,block] of record.additionalSpells.entries())extraOptions.push({name:record._bccAdditionalOptions[i],source:record.source,edition:record.edition,entries:[],additionalSpells:[clone(block)],_bccDependency:record._bccDependency,_bccRules:record._bccRules,_bccAuxiliary:true});
+      for(const [i,block] of record.additionalSpells.entries())extraOptions.push({name:record._bccAdditionalOptions[i],source:record.source,edition:record.edition,entries:[],_bccGrantText:clone(record.entries??[]),_bccImageParent:{kind,name:record.name,source:record.source},additionalSpells:[clone(block)],_bccDependency:record._bccDependency,_bccRules:record._bccRules,_bccAuxiliary:true});
     }
   }
   records.optionalfeature=[...records.optionalfeature,...extraOptions];
@@ -379,8 +380,8 @@ function collectSpellChoices(value, path=[],out=[]){
   for(const [key,child] of Object.entries(value))if(key!=="choose")collectSpellChoices(child,[...path,key],out);
   return out;
 }
-function applyAdditionalSpellChoices(record,index,adv,report){
-  addSpellRecipes(record,index,adv,report,{add:addAdv,lookup:lookupUid,classPool:spellRefsForClass,choiceConfig:itemChoiceConfig,choiceAdv});
+function applyAdditionalSpellChoices(record,index,adv,report,overlay,kind){
+  return addSpellRecipes(record,index,adv,report,{add:addAdv,lookup:lookupUid,classPool:spellRefsForClass,choiceConfig:itemChoiceConfig,choiceAdv,overlay,kind});
 }
 
 const classProgress = r=>({progression: r.casterProgression==="pact"?"pact":({"1/2":"half","1/3":"third"}[r.casterProgression]??r.casterProgression??"none"),ability:r.spellcastingAbility??""});
@@ -528,7 +529,7 @@ export async function convertOne(entry,index,content,report){
   const {kind,record,_id} = entry;
   const desc=renderEntries(record.entries??[],index,record.source,report);
   const base={_id,name:record.name,sort:kind==="chapter" ? Number(record.sequence??0)*10000 : 0,flags:originFlags(kind,record,content.sourceId)};
-  base.flags.bcc.converterVersion="0.0.7";
+  base.flags.bcc.converterVersion="0.0.8";
   base.flags.bcc.dependency=!!record._bccDependency;
   if(record._bccDependencyReasons?.length)base.flags.bcc.dependencyReasons=clone(record._bccDependencyReasons);
   if(record.prerequisite)base.flags.bcc.prerequisites=clone(record.prerequisite);
@@ -622,10 +623,11 @@ export async function convertOne(entry,index,content,report){
     addAdv(adv,choiceAdv("Choose Feat",0,itemChoiceConfig(pool,{"0":{count:Number(spec.count??1),replacement:false}},"feat",{type:"feat",subtype:categories.length===1?({O:"origin",G:"general",FS:"fightingStyle",EB:"epicBoon"}[categories[0]]??""):"",level:"",list:[],school:[]}),{kind:"featSelection"}));
   }
   if(kind==="race"&&record.ability)applyFeatAbilityAdvancement(record,adv,report);
-  if(record.additionalSpells)applyAdditionalSpellChoices(record,index,adv,report);
+  const overlay=getOverlay(kind,record,content.foundry);
+  const grantDecisions=record.additionalSpells?applyAdditionalSpellChoices(record,index,adv,report,overlay,kind):[];
+  if(grantDecisions.length)base.flags.bcc.grants={version:1,choices:grantDecisions};
 
   if(["race","background","class","subclass"].includes(kind))await buildGrants(index,kind,record,adv,report);
-  const overlay=getOverlay(kind,record,content.foundry);
   sys.identifier=record.foundryIdentifier??overlay?.identifier??sys.identifier;
   let effects=[];
   if(record.foundrySystem)applySystemFields(sys,record.foundrySystem);
@@ -646,6 +648,7 @@ export async function convertOne(entry,index,content,report){
       }
     }
   }
+  effects.push(...entitlementEffects(grantDecisions));
   if(record.foundryActivities)sys.activities=normalizeActivities(record.foundryActivities,effects,index,record,report);
   if(kind==="item"&&record.attachedSpells){
     if(!record.foundryActivities&&!Array.isArray(overlay?.activities))addItemSpellActivities(record,sys,index,lookupUid,report);
