@@ -42,7 +42,7 @@ export function applyNativeTraits(record, adv, add, report,index) {
         const options=value.split(";");
         if(key==="type")return options.some(v=>({"martial weapon":r.weaponCategory==="martial","simple weapon":r.weaponCategory==="simple","melee weapon":type==="M","ranged weapon":type==="R"})[v]);
         if(key==="rarity")return value==="none";
-        return options.some(v=>{const neg=v.startsWith("!"),code=properties[neg?v.slice(1):v];return code&&(neg?!(r.property??[]).includes(code):(r.property??[]).includes(code));});
+        return options.some(v=>{const neg=v.startsWith("!"),code=properties[neg?v.slice(1):v],actual=(r.property??[]).map(p=>String(p).split("|")[0]);return code&&(neg?!actual.includes(code):actual.includes(code));});
       });
     });
     return [...new Set(names.map(r=>specific(r.name,"weapon")).filter(Boolean).map(k=>`weapon:${k}`))];
@@ -51,7 +51,11 @@ export function applyNativeTraits(record, adv, add, report,index) {
     const grants = new Set(), choices = [];
     const convert = name => {const key = map?.(lc(name));return key ? `${category}:${key}` : null;};
     for (const block of list(record[field])) {
-      if (typeof block === "string") {const key = convert(block);if (key)grants.add(key);else report.incomplete.add(`${record.name}: unresolved ${category} ${block}`);continue;}
+      if (typeof block === "string") {
+        const filter=category==="weapon"?/\{@filter\s+[^|}]+\|items\|([^}]+)\}/i.exec(block)?.[1]:null;
+        if(filter){const pool=weaponFilter(filter);for(const key of pool)grants.add(key);if(!pool.length)report.incomplete.add(`${record.name}: empty proficiency filter ${filter}`);continue;}
+        const key = convert(block);if (key)grants.add(key);else report.incomplete.add(`${record.name}: unresolved ${category} ${block}`);continue;
+      }
       if (!block || typeof block !== "object") continue;
       for (const [key,value] of Object.entries(block)) if (value === true) {const native = convert(key);if (native) grants.add(native);else report.incomplete.add(`${record.name}: unresolved ${category} ${key}`);}
       for (const [key,count] of Object.entries(block)) if (/^any/.test(key) && Number.isFinite(Number(count))) {

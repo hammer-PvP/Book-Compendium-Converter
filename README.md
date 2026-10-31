@@ -1,4 +1,4 @@
-# Book Compendium Converter — 0.0.8 experimental
+# Book Compendium Converter — 0.0.9 experimental
 
 A local book importer targeting **Foundry VTT 14.369 / D&D5e 6.0.6**.
 This build expands native world-compendium generation. **Foundry and Character
@@ -17,7 +17,9 @@ Separately extract the contents of your own 5etools data release into
 `Data/bcc/5etools/data/books.json` exists, without an extra release-version
 directory. The development reference for this build was 5etools 2.39.0.
 
-BCC ships no book text, artwork, source data, Plutonium code, or 5etools code.
+BCC ships no book text, artwork, mechanical source records, Plutonium code, or 5etools code.
+The image-only association catalog contains names, identifiers and core icon paths;
+it is compiled from supplied native image metadata and Plutonium icon mappings.
 It does not require Plutonium, web services, AI inference, or online SRD lookups.
 All conversion code is original to BCC. Native system enum labels may be read
 locally to match tool and weapon proficiency keys; their item mechanics are not
@@ -56,6 +58,51 @@ For comparison with older versions, use a **fresh test world**. Rebuild updates 
 in the current conversion graph; it does not delete obsolete documents left by
 older conversions. Reload the world after rebuilding to refresh native spell
 list contributions.
+
+## 0.0.9 changes
+
+- Compendium image indexes request the complete `system.source` object rather
+  than conflicting nested fields. Binary image signatures are checked at byte
+  offsets, including WebP headers containing non-UTF-8 length bytes.
+- An image-only association catalog supplements installed compendium indexes.
+  Matching uses native document type, name/identifier, rules and parent context;
+  ambiguous results remain reported. It reuses core `icons/` files without
+  requiring Plutonium or enabling a premium content source. These associations
+  select artwork only; they do not supply mechanics or expand imported sources.
+- Class/subclass, background and species portraits prefer their supplied local
+  illustrations. Spells and features prefer specific icons before inherited
+  parent illustrations. Species-derived features retain their base-species
+  image identity, including complete variants. No species flow is reorganized.
+- Image reporting includes coverage per document category, provider, inherited
+  portraits, category fallbacks and failed sources. Reimports can replace a
+  previous fallback while reusing the shared deterministic asset cache.
+- Open equipment categories are bounded to the selected book, the declared
+  parent context and one rules-compatible base-equipment catalog. Namespaced
+  weapon properties and textual item filters become native proficiencies.
+- Explicitly named physical resources created by a source rest rule can become
+  standalone Items, with links back to their creating feature. Creation remains
+  consumer-managed: BCC does not add another acquisition grant. This supplies
+  the Book of Shadows represented in the XPHB source. The corresponding native
+  document type comes from reference metadata, not a name-specific code branch.
+- Structured point pools supply uses/recovery. Resource-priced spell recipes
+  become linked Cast activities whose resource IDs bind when embedded in an
+  Actor. A missing effect may be recovered only when a save explicitly refers
+  to it and the source defines one unambiguous, registered condition.
+- GM folder menus add **Excluir pasta e todo o conteúdo** both inside World
+  compendiums and on sidebar folders containing World compendiums. Confirmation
+  names the target and counts its contents, requires a checkbox and revalidates
+  the scope. System/module packs are blocked, unrelated contents remain, and
+  internal-pack lock state is restored. Individual World-pack deletion remains.
+
+Local data and images remain the source; no migration to an online provider is
+included. Existing Actor inventories are not synchronized. Reimport in a fresh
+test world, or explicitly remove old World packs before importing: rebuild
+does not prune obsolete dependencies from older versions.
+
+Two XPHB Martial Arts rider references have no Activity definition in the supplied
+supplement. The enchantments and their defined effects are retained, and the
+missing riders remain explicit in the report. Full live character creation,
+level-up and combat validation remains pending; static checks are not live QA.
 
 ## 0.0.8 changes
 
@@ -235,6 +282,7 @@ automatically so it can be installed through Foundry for testing. Publication
 does not establish end-to-end validation. The current development scope is
 broader world import; exporting a selected folder and its dependencies is deferred.
 
-Public source and release ZIPs must exclude official content, Plutonium,
-5etools, test files, fixtures and QA data. Release archives contain only
+Public source and release ZIPs must exclude book text, official mechanical
+records, artwork, third-party conversion code, test files, fixtures and QA data.
+The image association catalog contains metadata only. Release archives contain only
 `module.json`, `README.md`, `LICENSE`, `scripts/` and `styles/`.

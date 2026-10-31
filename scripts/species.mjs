@@ -29,13 +29,13 @@ export function speciesGraph(input) {
     const intro = (template.entries ?? []).filter(e => typeof e === "string");
     for (const {variant,entry} of alternatives) {
       projected.add(variant);
-      features.push({name:entry.name,source:base.source,page:base.page,edition:base.edition,raceName:base.name,raceSource:base.source,
-        entries:[...clone(intro),...clone(entry.entries ?? [])],_bccOption:true,_bccDependency:base._bccDependency});
+      features.push({name:entry.name,source:base.source,page:base.page,edition:base.edition,_bccRules:base._bccRules,raceName:base.name,raceSource:base.source,
+        entries:[...clone(intro),...clone(entry.entries ?? [])],_bccImageParent:{kind:"race",name:base.name,source:base.source},_bccOption:true,_bccDependency:base._bccDependency});
     }
   }
   const retained = races.filter(r => !projected.has(r));
   for (const race of retained) for (const entry of race.entries ?? []) if (entry?.name && Array.isArray(entry.entries) && ["entries","section"].includes(entry.type)) {
-    features.push({name:entry.name,source:race.source,page:race.page,edition:race.edition,raceName:race.name,raceSource:race.source,entries:clone(entry.entries),
+    features.push({name:entry.name,source:race.source,page:race.page,edition:race.edition,_bccRules:race._bccRules,raceName:race.name,raceSource:race.source,entries:clone(entry.entries),_bccImageParent:{kind:"race",name:race._bccVariantOf?.name??race.name,source:race._bccVariantOf?.source??race.source},
       _bccChoiceTemplate:!!entry._bccChoiceTemplate,_bccGrantLevel:availableLevel(entry),_bccDependency:race._bccDependency,_bccIgnored:!!race._bccSpeciesTemplate});
   }
   return {races:retained,features};

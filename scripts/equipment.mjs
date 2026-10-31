@@ -17,6 +17,8 @@ export function equipmentCategoryPool(records, category, owner) {
   const score=r=>(lc(r.source)===lc(owner.source)?8:0)+(rule(r)&&rule(r)===rule(owner)?4:0)+(r._bccBaseEquipment?1:0);
   const names=new Map();
   for(const r of records) {
+    const allowed=(owner._bccEquipmentSources??[owner.source]).map(lc);
+    if(!allowed.includes(lc(r.source))&&!(r.otherSources??[]).some(s=>allowed.includes(lc(s.source))))continue;
     const code=String(r.type??"").split("|")[0];
     if(r._bccIsGroup||r.reqAttune||r.bonusWeapon||r.bonusAc||r._bccBaseItem||r.rarity&&!["none","unknown"].includes(lc(r.rarity)))continue;
     const match=native[0]==="weapon"?["M","R"].includes(code)&&r.weaponCategory===(native[1].startsWith("sim")?"simple":"martial")&&(!native[1].endsWith("M")||code==="M"):

@@ -196,6 +196,8 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
   }
   progress("verify",completed,"Conferindo listas de magias e finalizando relatório...");
   await assets.verify();
+  if(report.assets.failures.length)report.warnings.push(`${report.assets.failures.length} image sources failed; details are listed in assets.failures`);
+  for(const [kind,c] of Object.entries(report.assets.coverage))report.information.add(`Images / ${kind}: ${c.specific} specific, ${c.inherited} inherited, ${c.fallback} category fallbacks, ${c.unresolved} unresolved (${c.total} documents)`);
   for(const missing of report.assets.unresolved)report.incomplete.add(`Image unavailable: ${missing}`);
   const verifiedLists=[];
   for(const entry of index.all.filter(e=>e.kind==="spellList")){

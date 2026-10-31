@@ -26,7 +26,7 @@ export async function prepareNativeKeys(){
     for(const [collection,entries] of packs){
       const pack=game.packs.get(collection);if(!pack)continue;
       try{
-        const index=await pack.getIndex({fields:["name","system.type.value"]});
+        const index=await pack.getIndex({fields:["name","system.type"]});
         for(const entry of entries){const row=index.get?.(entry.id)??[...index].find(r=>r._id===entry.id);if(row)keys[entry.kind].set(normalize(row.name),{key:entry.key,category:row.system?.type?.value});}
       }catch(error){console.warn(`BCC | Native enum labels unavailable for ${collection}`,error);}
     }

@@ -6,7 +6,7 @@ const kindNames={race:"Species",background:"Backgrounds",feat:"Feats",optionalfe
  class:"Classes",subclass:"Subclasses",classFeature:"Class Features",subclassFeature:"Subclass Features",
  spell:"Spells",item:"Items & Equipment",monster:"Monsters",object:"Objects",vehicle:"Vehicles"};
 export class BCCApp extends foundry.applications.api.ApplicationV2 {
-  static DEFAULT_OPTIONS={id:"bcc-book-importer",window:{title:"Book Compendium Converter · 0.0.8",resizable:true},position:{width:760,height:680}};
+  static DEFAULT_OPTIONS={id:"bcc-book-importer",window:{title:"Book Compendium Converter · 0.0.9",resizable:true},position:{width:760,height:680}};
   constructor(options={}){super(options);this.books=null;this.bookId="XPHB";this.preview=null;this.busy=false;this.status="";this.result=null;this.error="";this.importMode="create";this.progress=null;this.acknowledged=false;}
   async load(){
     try{this.books=await getBooks();if(!this.books.some(b=>b.id===this.bookId))this.bookId=this.books[0]?.id;this.error="";}
@@ -29,7 +29,9 @@ export class BCCApp extends foundry.applications.api.ApplicationV2 {
     const message=this.error?`<p class="bcc-error">${escapeHtml(this.error)}</p>`:"";
     const progress=this.progress&&!this.acknowledged?`<section class="bcc-progress" aria-live="polite"><label>${escapeHtml(this.progress.phase==="done"?"Processamento finalizado":"Importação em andamento")} · <span class="bcc-percent">${this.progress.percent}%</span></label><progress max="100" value="${this.progress.percent}" aria-label="Progresso da importação"></progress><span class="bcc-count">${this.progress.completed}/${this.progress.total} documentos processados</span>${!this.busy?'<button type="button" data-action="acknowledge">OK</button>':""}</section>`:"";
     const status=this.status?`<p class="bcc-status">${escapeHtml(this.status)}</p>`:"";
-    const assets=this.result?.assets?`<p>Ícones: ${this.result.assets.copied} arquivos copiados · ${this.result.assets.reused} reutilizados · ${this.result.assets.unresolved.length} campos sem imagem. Pasta: <code>assets/srd5e</code>.</p>`:"";
+    const imageStats=this.result?.assets,imageCoverage=Object.values(imageStats?.coverage??{});
+    const sumImages=key=>imageCoverage.reduce((sum,row)=>sum+(row[key]??0),0);
+    const assets=imageStats?`<p>Ícones: ${imageStats.copied} arquivos copiados · ${imageStats.reused} reutilizados · ${imageStats.unresolved.length} campos sem imagem. Pasta: <code>assets/srd5e</code>.</p><p>${sumImages("specific")} documentos com imagem específica · ${sumImages("inherited")} com imagem herdada · ${sumImages("fallback")} com ícone de categoria · ${imageStats.failures.length} fontes de imagem com falha. Detalhamento por categoria no relatório.</p>`:"";
     const after=this.result?`<section class="bcc-result"><h3>Importação ${this.result.errors.length ? "com erros" : (this.result.unresolved.length||this.result.incomplete.length ? "com pendências" : "concluída")}</h3>
       <p>${Object.values(this.result.created).reduce((a,b)=>a+b,0)} novos documentos · ${Object.values(this.result.updated??{}).reduce((a,b)=>a+b,0)} atualizados · ${Object.values(this.result.existing??{}).reduce((a,b)=>a+b,0)} já existentes · ${this.result.errors.length} erros de gravação · ${this.result.unresolved.length} vínculos não resolvidos · ${this.result.incomplete.length} pontos mecânicos pendentes</p>
       ${assets}<button type="button" data-action="report"><i class="fas fa-file-arrow-down"></i> Baixar relatório JSON</button></section>`:"";

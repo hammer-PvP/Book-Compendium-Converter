@@ -1,4 +1,6 @@
 import {entitlementEffects} from "./grant-policy.mjs";
+import {createdResourceLinks} from "./created-resources.mjs";
+import {addResourceSpellActivities} from "./resource-spells.mjs";
 import {buildActor} from "./actors.mjs";
 import {prepareNativeKeys} from "./native-keys.mjs";
 import {addItemSpellActivities} from "./item-spells.mjs";
@@ -438,6 +440,17 @@ function normalizeActivities(arr,effects,index,record,report){
   const out={};
   const source=(arr??[]).filter(a=>a?.type);
   const idByFoundryId=new Map(source.filter(a=>a.foundryId).map((a,i)=>[a.foundryId,`act${String(source.indexOf(a)+1).padStart(13,"0")}`]));
+  // A missing status-only definition is recoverable when the source names
+  // exactly one condition and exactly one missing effect. Other gaps remain explicit.
+  const requested=[...new Set(source.flatMap(a=>(a.effects??[]).map(e=>e.foundryId)).filter(Boolean))];
+  const missing=requested.filter(id=>!effects.some(e=>e.flags?.bcc?.foundryId===id));
+  const statuses=[...new Set([...JSON.stringify(record.entries??[]).matchAll(/\{@condition\s+([^}|]+)/gi)].map(m=>canon(m[1])))];
+  const known=new Set((globalThis.CONFIG?.statusEffects??[]).map(e=>e.id));
+  if(missing.length===1&&statuses.length===1&&known.has(statuses[0])&&source.some(a=>a.type==="save"&&(a.effects??[]).some(e=>e.foundryId===missing[0]))){
+    const id=`eff${String(effects.length+1).padStart(13,"0")}`;
+    effects.push({_id:id,name:record.name,type:"base",disabled:false,transfer:false,statuses,system:{changes:[]},flags:{bcc:{foundryId:missing[0],sourceCondition:true}}});
+    report.information.add(`${record.name}: missing supplemental effect recovered from the single explicit source condition ${statuses[0]}`);
+  }
   const effectIdByFoundryId=new Map(effects.filter(e=>e.flags?.bcc?.foundryId).map(e=>[e.flags.bcc.foundryId,e._id]));
   for(const [i,a] of source.entries()){
     const _id=`act${String(i+1).padStart(13,"0")}`;
@@ -482,7 +495,7 @@ function normalizeActivities(arr,effects,index,record,report){
         for(const rider of e.riders?.activity??[]){
           const id=idByFoundryId.get(rider.foundryId);
           if(id)riders.activity.push(id);
-          else report.unresolved.add(`${context}: missing rider Activity ${rider.foundryId}`);
+          else report.unresolved.add(`${context}: supplemental rider Activity ${rider.foundryId} has no definition; linked enchantment retained without that rider`);
         }
         for(const rider of e.riders?.effect??[]){
           const id=effectIdByFoundryId.get(rider.foundryId);
@@ -526,10 +539,10 @@ function applyFeatAbilityAdvancement(record,adv,report){
   if(record.ability.length>1 && !choice)report.incomplete.add(`${record.name}: multiple ability alternatives require GM review`);
 }
 export async function convertOne(entry,index,content,report){
-  const {kind,record,_id} = entry;
+  const {kind,_id} = entry,record=clone(entry.record);
   const desc=renderEntries(record.entries??[],index,record.source,report);
   const base={_id,name:record.name,sort:kind==="chapter" ? Number(record.sequence??0)*10000 : 0,flags:originFlags(kind,record,content.sourceId)};
-  base.flags.bcc.converterVersion="0.0.8";
+  base.flags.bcc.converterVersion="0.0.9";
   base.flags.bcc.dependency=!!record._bccDependency;
   if(record._bccDependencyReasons?.length)base.flags.bcc.dependencyReasons=clone(record._bccDependencyReasons);
   if(record.prerequisite)base.flags.bcc.prerequisites=clone(record.prerequisite);
@@ -613,6 +626,12 @@ export async function convertOne(entry,index,content,report){
     spellSynthesisIssues=synthesized.issues;
   } else if(kind==="item"){
     buildEquipment(record,sys,report);
+    if(record._bccCreatedResource){
+      base.flags.bcc.createdResource=clone(record._bccCreatedResource);
+      if(record.foundryType==="weapon")sys.type={value:"",baseItem:""};
+      if(record._bccCreatedResource.focus)sys.properties=[...new Set([...(sys.properties??[]),"foc"])];
+      report.information.add(`${record.name}: named source-created resource is available as a standalone Item; its lifecycle remains consumer-managed`);
+    }
     if(typeof record.reqAttune==="string"&&record.reqAttune!=="optional")sys.description.value=`<p><strong>Attunement:</strong> ${safe(record.reqAttune)}</p>${sys.description.value}`;
     if(!sys.activities&&!["container"].includes(itemType(record))){const a=genericActivity(record);if(a)sys.activities={[a._id]:a};const uses=resourceUses(record);if(uses&&!sys.uses)sys.uses=uses;}
   }
@@ -624,6 +643,7 @@ export async function convertOne(entry,index,content,report){
   }
   if(kind==="race"&&record.ability)applyFeatAbilityAdvancement(record,adv,report);
   const overlay=getOverlay(kind,record,content.foundry);
+  const resources=createdResourceLinks(record,index);if(resources.length)base.flags.bcc.createdResources=resources;
   const grantDecisions=record.additionalSpells?applyAdditionalSpellChoices(record,index,adv,report,overlay,kind):[];
   if(grantDecisions.length)base.flags.bcc.grants={version:1,choices:grantDecisions};
 
@@ -648,12 +668,16 @@ export async function convertOne(entry,index,content,report){
       }
     }
   }
+  if(record.resources?.length===1&&record.resources[0].type==="pointPool"){
+    const uses=resourceUses(record);if(uses&&(!sys.uses?.max))sys.uses=uses;
+  }
   effects.push(...entitlementEffects(grantDecisions));
   if(record.foundryActivities)sys.activities=normalizeActivities(record.foundryActivities,effects,index,record,report);
   if(kind==="item"&&record.attachedSpells){
     if(!record.foundryActivities&&!Array.isArray(overlay?.activities))addItemSpellActivities(record,sys,index,lookupUid,report);
     else {const pending={...sys,activities:clone(sys.activities??{})};addItemSpellActivities(record,pending,index,lookupUid,report);if(Object.keys(pending.activities??{}).length!==Object.keys(sys.activities??{}).length)report.incomplete.add(`${record.name}: supplemental activities leave attached spells unrepresented; supplement retained`);}
   }
+  addResourceSpellActivities(record,sys,index,report);
   if(kind==="classFeature"&&sys.uses?.max&&/^\d+$/.test(String(sys.uses.max))){const parent=index.all.find(e=>e.kind==="class"&&canon(e.record.name)===canon(record.className)&&canon(e.record.source)===canon(record.classSource));if(parent&&resourceScales(parent.record,index,slug).some(a=>a.configuration.identifier===slug(record.name)))sys.uses.max=`@scale.${slug(parent.record.name)}.${slug(record.name)}`;}
   if(sys.uses?.max){
     const explicit=overlay?.system?.["uses.recovery"]??record.foundrySystem?.["uses.recovery"];

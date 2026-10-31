@@ -21,6 +21,8 @@ export function prerequisites(record, report, slug) {
   return {level,items:[...items],repeatable:!!record.repeatable || /you can (?:gain|take) this (?:invocation|feat|feature) more than once/i.test(plainText(record.entries))};
 }
 export function resourceUses(record) {
+  const pools=(record.resources??[]).filter(r=>r.type==="pointPool"&&r.count!=null);
+  if(pools.length===1){const r=pools[0],period=({restShort:"sr",restLong:"lr",day:"day"})[r.recharge];return {max:String(r.count),spent:0,recovery:period?[{period,type:"recoverAll"}]:[]};}
   const text = plainText(record.entries), low = text.toLowerCase();
   const rest = /(?:short or long|short|long) rest/i.exec(text)?.[0].toLowerCase();
   const period = rest?.includes("short") ? "sr" : rest ? "lr" : null;

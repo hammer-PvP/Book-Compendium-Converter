@@ -20,3 +20,10 @@ export async function forgetPackSpellLists(pack){
   const retained=existing.filter(uuid=>!uuid.startsWith(`Compendium.${pack.collection}.`));
   if(retained.length!==existing.length)await game.settings.set(ID,"spellLists",retained);
 }
+export async function forgetDocumentSpellLists(pack,ids){
+  const existing=game.settings.get(ID,"spellLists")??[];
+  const prefixes=ids.map(id=>`Compendium.${pack.collection}.JournalEntry.${id}.`);
+  const retained=existing.filter(uuid=>!prefixes.some(prefix=>uuid.startsWith(prefix)));
+  if(retained.length!==existing.length)await game.settings.set(ID,"spellLists",retained);
+  return retained.length!==existing.length;
+}

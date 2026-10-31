@@ -1,12 +1,13 @@
-import {canonical} from "./data-model.mjs";
 import {loadArtwork,artworkKey} from "./artwork-source.mjs";
 import {findSupplement} from "./library-source.mjs";
+import {referenceIcons,resolveIcon,validImageSignature} from "./image-resolver.mjs";
 export const ASSET_ROOT="assets/srd5e";
 const ID="book-compendium-converter";
 const norm=value=>String(value??"").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]/g,"");
 const extension=value=>/\.([a-z0-9]+)(?:[?#]|$)/i.exec(value)?.[1]?.toLowerCase();
 const TYPES={webp:"image/webp",png:"image/png",jpg:"image/jpeg",jpeg:"image/jpeg",svg:"image/svg+xml",gif:"image/gif",avif:"image/avif"};
 const FALLBACK={spell:"icons/svg/book.svg",class:"icons/svg/book.svg",subclass:"icons/svg/book.svg",race:"icons/svg/mystery-man.svg",background:"icons/svg/door-exit.svg",feat:"icons/svg/upgrade.svg",optionalfeature:"icons/svg/upgrade.svg",raceFeature:"icons/svg/upgrade.svg",classFeature:"icons/svg/upgrade.svg",subclassFeature:"icons/svg/upgrade.svg",monster:"icons/svg/mystery-man.svg",object:"icons/svg/item-bag.svg",vehicle:"icons/svg/wing.svg",weapon:"icons/svg/sword.svg",equipment:"icons/svg/shield.svg",tool:"icons/svg/hammer.svg",loot:"icons/svg/item-bag.svg",container:"icons/svg/chest.svg",consumable:"icons/svg/potion.svg"};
+const CATEGORY_CORE={A:"icons/weapons/ammunition/arrow-simple.webp",AF:"icons/weapons/ammunition/ammunition-brass-silver.webp",FD:"icons/consumables/food/bowl-stew-brown.webp",GS:"icons/sundries/gaming/dice-runed-brown.webp"};
 export function imageSource(value){
   if(typeof value!=="string"||!value.trim())return null;
   let path=value.trim().replaceAll("\\","/").replace(/^Data\//i,"");
@@ -31,7 +32,7 @@ export class AssetImporter{
   constructor(content,index,report,onProgress=()=>{}){
     this.content=content;this.index=index;this.report=report;this.onProgress=onProgress;this.files=new Set();this.pending=new Map();this.used=new Set();this.initialFiles=new Set();this.reusedFiles=new Set();this.transportFailures=new Map();this.catalog=[];this.matches=new Map();this.artwork=new Map();this.refs=new Map(index.all.map(e=>[e.uuid,e]));
     this.root=game.settings.get(ID,"artworkSource")||"bcc/5etools/img";
-    report.assets={root:ASSET_ROOT,copied:0,reused:0,fields:0,fallbacks:0,failures:[],matches:0,ambiguous:[],unresolved:[]};
+    report.assets={root:ASSET_ROOT,copied:0,reused:0,fields:0,fallbacks:0,failures:[],matches:0,ambiguous:[],unresolved:[],coverage:{},providers:{}};
     this.stats=report.assets;
   }
   async prepare(){
@@ -58,35 +59,39 @@ export class AssetImporter{
     for(const [i,pack] of packs.entries()){
       this.onProgress(`Ícones: indexando fontes disponíveis (${i+1}/${packs.length})...`);
       try{
-        const entries=await pack.getIndex({fields:["name","type","img","system.identifier","system.source.book","system.source.rules","system.requirements"]});
+        const entries=await pack.getIndex({fields:["name","type","img","system.identifier","system.source","system.requirements"]});
         for(const row of entries)if(row.img)this.catalog.push({name:row.name,type:row.type,img:row.img,system:row.system??{},pack:pack.collection});
       }catch(error){this.stats.failures.push({phase:"index",source:pack.collection,message:String(error.message??error)});}
     }
+    this.stats.matches=this.catalog.length;
+    this.catalog.push(...referenceIcons);
   }
   lookup(kind,r,doc){
     const type=nativeType(kind,doc),names=new Set([r.name,r._bccImageParent?.name,r._bccVariantOf?.name,r._baseName,String(r.baseItem??r._bccBaseItem??"").split("|")[0]].filter(Boolean).map(norm)),identifier=norm(doc.system?.identifier),key=[type,identifier,r.source,rules(r),r.className,...names].join("|");
     if(this.matches.has(key))return this.matches.get(key);
-    const candidates=this.catalog.filter(e=>e.type===type&&(names.has(norm(e.name))||identifier&&norm(e.system.identifier)===identifier));
-    const rank=e=>(canonical(e.system.source?.book)===canonical(r.source)?8:0)+(rules(r)&&rules(r)===rules(e)?4:0)+(r.className&&norm(e.system.requirements).includes(norm(r.className))?2:0);
-    candidates.sort((a,b)=>rank(b)-rank(a)||a.pack.localeCompare(b.pack));
-    const top=candidates.filter(e=>rank(e)===rank(candidates[0]??{}));
-    const out=new Set(top.map(e=>e.img)).size===1?top[0]:null;
-    if(!out&&top.length)this.stats.ambiguous.push({name:r.name,source:r.source,type,candidates:top.map(e=>({name:e.name,pack:e.pack}))});
+    const {match:out,ambiguous}=resolveIcon(this.catalog,kind,r,doc);
+    if(ambiguous.length)this.stats.ambiguous.push({name:r.name,source:r.source,type,candidates:ambiguous.map(e=>({name:e.name,pack:e.pack??"core-icon-mapping",img:e.img}))});
     this.matches.set(key,out);return out;
   }
   candidates(kind,r,doc){
     const overlay=findSupplement(kind,r,this.content.foundry??{}),out=[];
-    for(const path of [r.foundryImg,overlay?.img,doc.img,r.img])if(path)out.push({source:path,via:"explicit"});
-    const found=this.lookup(kind,r,doc);if(found)out.push({source:found.img,via:"compendium",pack:found.pack});
+    for(const path of [r.foundryImg,overlay?.img,r.img,doc.img&&!doc.img.startsWith("icons/svg/")?doc.img:null])if(path)out.push({source:path,via:"explicit"});
+    const found=this.lookup(kind,r,doc),matched=found?[{source:found.img,via:found.via??"compendium",pack:found.pack}]:[];
+    const portraits=["class","subclass","race","background","monster","object","vehicle"].includes(kind);
+    if(!portraits)out.push(...matched);
     let images=[...(r.fluff?.images??[]),...(r.images??[]),...(this.artwork.get(artworkKey(kind,r))??[])];
-    if(!images.length){const parent=r._bccImageParent??(r.raceName?{kind:"race",name:r.raceName,source:r.source}:r.className?{kind:"class",name:r.className,source:r.classSource??r.source}:r._bccVariantOf?{kind,...r._bccVariantOf}:null);if(parent)images=this.artwork.get(artworkKey(parent.kind,parent))??[];}
-    for(const image of images){const source=href(image,this.root);if(source&&(this.artworkAvailable||/^https?:\/\//i.test(source)))out.push({source,via:"artwork"});}
+    let inherited=false;
+    if(!images.length){const parent=r._bccImageParent??(r._bccVariantOf?{kind,...r._bccVariantOf}:r.raceName?{kind:"race",name:r.raceName,source:r.source}:r.className?{kind:"class",name:r.className,source:r.classSource??r.source}:null);if(parent){images=this.artwork.get(artworkKey(parent.kind,parent))??[];inherited=true;}}
+    for(const image of images){const source=href(image,this.root);if(source&&(this.artworkAvailable||/^https?:\/\//i.test(source)))out.push({source,via:inherited?"inherited":"artwork"});}
+    if(portraits)out.push(...matched);
+    if(kind==="item"&&CATEGORY_CORE[String(r.type).split("|")[0]])out.push({source:CATEGORY_CORE[String(r.type).split("|")[0]],via:"category"});
     const native=globalThis.CONFIG?.DND5E?.defaultArtwork?.[doc.type==="npc"||doc.type==="vehicle"?"Actor":"Item"]?.[doc.type];
     const school=doc.type==="spell"?globalThis.CONFIG?.DND5E?.spellSchools?.[doc.system?.school]?.icon:null;
     for(const source of [school,native])if(source&&TYPES[extension(source)])out.push({source,via:"category"});
     const fallback=FALLBACK[kind==="item"?doc.type:kind]??FALLBACK[doc.type]??"icons/svg/item-bag.svg";
     out.push({source:fallback,via:"category"},{source:"icons/svg/item-bag.svg",via:"category"});
-    return [...new Map(out.map(e=>[imageSource(e.source),{...e,source:imageSource(e.source)}])).values()].filter(e=>e.source);
+    const seen=new Set();
+    return out.map(e=>({...e,source:imageSource(e.source)})).filter(e=>{if(!e.source||seen.has(e.source))return false;seen.add(e.source);return true;});
   }
   async copy(raw){
     const source=imageSource(raw);if(!source)throw Error("Invalid image path");
@@ -108,8 +113,8 @@ export class AssetImporter{
     const blob=await response.blob(),mime=blob.type.split(";")[0].toLowerCase();
     const ext=Object.keys(TYPES).find(k=>TYPES[k]===mime)??extension(source);
     if(!blob.size||blob.size>20*1024*1024||!TYPES[ext]||(mime&&!mime.startsWith("image/")&&mime!=="application/octet-stream"))throw Error("Response is not a supported image (maximum 20 MiB)");
-    const header=new Uint8Array(await blob.slice(0,1024).arrayBuffer()),ascii=new TextDecoder().decode(header);
-    const valid=ext==="svg"?/<svg[\s>]/i.test(ascii):ext==="png"?[137,80,78,71,13,10,26,10].every((n,i)=>header[i]===n):["jpg","jpeg"].includes(ext)?header[0]===255&&header[1]===216&&header[2]===255:ext==="webp"?ascii.startsWith("RIFF")&&ascii.slice(8,12)==="WEBP":ext==="gif"?/^GIF8[79]a/.test(ascii):ext==="avif"?ascii.includes("ftyp")&&ascii.includes("avif"):false;
+    const header=new Uint8Array(await blob.slice(0,1024).arrayBuffer());
+    const valid=validImageSignature(ext,header);
     if(!valid)throw Error("Invalid image signature");
     const file=new File([blob],`${key}.${ext}`,{type:TYPES[ext]}),expected=`${ASSET_ROOT}/${file.name}`;
     const result=await this.picker.upload("data",ASSET_ROOT,file,{}, {notify:false});
@@ -128,7 +133,10 @@ export class AssetImporter{
   }
   async apply(doc,entry){
     const r=entry?.record??{name:doc.name,source:doc.system?.source?.book},kind=entry?.kind??(doc.type==="spell"?"spell":doc.type==="feat"?"optionalfeature":"item"),files=[];
-    if(doc.system){const path=await this.field(doc,"img",this.candidates(kind,r,doc),files);if(path)doc.img=path;}
+    if(doc.system){const path=await this.field(doc,"img",this.candidates(kind,r,doc),files);if(path)doc.img=path;
+      const provider=files.find(f=>f.field==="img")?.via??"unresolved",coverage=this.stats.coverage[kind]??={total:0,specific:0,inherited:0,fallback:0,unresolved:0};coverage.total++;coverage[provider==="category"?"fallback":provider==="unresolved"?"unresolved":provider==="inherited"?"inherited":"specific"]++;
+      this.stats.providers[provider]=(this.stats.providers[provider]??0)+1;
+    }
     for(const [id,a] of Object.entries(doc.system?.activities??{})){
       const source=a.img??globalThis.CONFIG?.DND5E?.activityTypes?.[a.type]?.documentClass?.metadata?.img;
       const candidates=[...source?[{source,via:"activity"}]:[],...doc.img?[{source:doc.img,via:"owner"}]:[]];
@@ -145,7 +153,7 @@ export class AssetImporter{
   async verify(){
     const actual=new Set(((await this.picker.browse("data",ASSET_ROOT)).files??[]).map(imageSource));
     for(const path of this.used)if(!actual.has(path))throw Error(`BCC | Arquivo de imagem ausente após gravação: ${path}`);
-    this.stats.matches=this.catalog.length;return this.stats;
+    this.stats.mappings=referenceIcons.length;return this.stats;
   }
 }
 

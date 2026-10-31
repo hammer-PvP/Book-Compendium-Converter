@@ -45,6 +45,10 @@ export function addSpellRecipes(record,index,adv,report,{add,lookup,classPool,ch
         const uid = value.replace(/#.*$/, ""), ref = lookup(index,"spell",uid,record.source);
         if (!ref) {report.unresolved.add(`${record.name}: additional spell ${uid}`);return;}
         if (context.mode === "expanded") return;
+        if(context.resource){
+          if(!Number.isFinite(context.cost)||context.cost<=0){report.incomplete.add(`${record.name}: invalid resource spell cost`);return;}
+          (record._bccResourceSpells??=[]).push({uuid:ref.uuid,name:ref.record.name,spellLevel:Number(ref.record.level??0),ability:ability[0]??"",resource:context.resource,cost:context.cost,level:context.level});return;
+        }
         const spell = {ability,method:context.mode === "innate" ? "innate" : "spell",prepared:2,uses:{max:context.count ? String(context.count) : "",per:context.period ?? "",requireSlot:false}};
         const policy=spellChoicePolicy(record,null,context,overlay);
         if(policy.representation==="deferred"){decisions.push({...policy,mode:context.mode,level:context.level,count:1,pool:[ref.uuid],spell});report.information.add(`${record.name}: ${policy.reason}`);return;}
@@ -78,7 +82,12 @@ export function addSpellRecipes(record,index,adv,report,{add,lookup,classPool,ch
       }
       for (const [key,child] of Object.entries(value)) {
         if (/^(?:daily|rest|weekly|resource|limited)$/.test(key)) {
-          if (key === "resource" || key === "limited") {report.incomplete.add(`${record.name}: ${key} additional-spell consumption needs resource binding`);continue;}
+          if(key==="resource"){
+            if(!block.resourceName){report.incomplete.add(`${record.name}: resource additional-spell recipe has no resource name`);continue;}
+            for(const [cost,spells] of Object.entries(child))visit(spells,{...context,resource:block.resourceName,cost:Number(cost)});
+            continue;
+          }
+          if(key==="limited"){report.incomplete.add(`${record.name}: limited additional-spell consumption needs a defined use pool`);continue;}
           if(key==="weekly")report.incomplete.add(`${record.name}: weekly spell uses require manual recovery; no native weekly recovery period`);
           for (const [count,spells] of Object.entries(child)) visit(spells,{...context,count:parseInt(count),period:key === "rest" ? "sr" : key === "weekly" ? "" : /long rest/i.test(JSON.stringify(record.entries??[]))?"lr":"day"});
         } else if (/^\d+$/.test(key)) visit(child,{...context,level:Number(key)});

@@ -3,6 +3,7 @@ import {specialEquipmentReference} from "./equipment.mjs";
 import {parseSpellFilter,matchesSpellMetadata} from "./spell-filter.mjs";
 import {equipmentCategoryPool} from "./equipment.mjs";
 import {attachedSpellRecipes} from "./item-spells.mjs";
+import {createdResources} from "./created-resources.mjs";
 import {readJson, getBooks} from "./source.mjs";
 import {canonical as canon, clone, merge, identity, prepareRecords, attachSubraces, DEFAULT_SOURCES} from "./data-model.mjs";
 const KINDS = ["race", "background", "feat", "item", "optionalfeature", "class", "subclass", "classFeature", "subclassFeature", "spell", "monster", "object", "vehicle"];
@@ -136,6 +137,10 @@ export async function readLibraryBook(id) {
   for (let pos = 0; pos < queue.length; pos++) {
     if (queue.length > 15000) throw Error("Grafo de dependências excedeu o limite de 15000 entidades.");
     const {kind, record} = queue[pos], refs = [];
+    if(kind!=="item")for(const resource of createdResources(record)){
+      const exists=catalog("item").find(r=>canon(r.name)===canon(resource.name)&&canon(r.source)===canon(resource.source));
+      include("item",exists??resource,true,reasonFor(record,"named resource created by source rule"));
+    }
     // Narrative links are rendered when available; they do not expand publication scope.
     // Native activity references and structured mechanical fields are mandatory.
     const mechanical={...record};for(const key of ["entries","fluff","additionalEntries","startingEquipment"])delete mechanical[key];
@@ -149,6 +154,13 @@ export async function readLibraryBook(id) {
     }
     featureReferences(record.entries);
     if(record.startingEquipment){
+      // Open categories may use this publication, its explicit parent, and one
+      // rules-compatible base-equipment catalog, never every loaded supplement.
+      const rules=ruleOf(record)??sourceRules.get(canon(record.source));
+      const baseSources=new Map();
+      for(const item of catalog("item"))if(item._bccBaseEquipment&&(!rules||(ruleOf(item)??sourceRules.get(canon(item.source)))===rules))baseSources.set(item.source,(baseSources.get(item.source)??0)+1);
+      const baseSource=[...baseSources].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))[0]?.[0];
+      record._bccEquipmentSources=[...new Set([sourceId,record.source,record.classSource,baseSource].filter(Boolean))];
       const categories=new Set();
       function scan(v){if(typeof v==="string"){refs.push(["item",v]);return;}if(Array.isArray(v))v.forEach(scan);else if(v&&typeof v==="object"){if(v.equipmentType)categories.add(v.equipmentType);for(const type of v.equipmentTypes??[])categories.add(type);
           if(v.item)refs.push(["item",v.item]);if(v.special){const ref=specialEquipmentReference(v.special,catalog("item"),record);if(ref)refs.push(["item",ref]);}Object.values(v).forEach(scan);}}
@@ -219,7 +231,7 @@ export async function readLibraryBook(id) {
   const records = Object.fromEntries(KINDS.map(kind => [kind, [...selected.values()].filter(x => x.kind === kind).map(x => x.record)]));
   for(const rows of Object.values(records))for(const r of rows)r._bccRules=ruleOf(r)??sourceRules.get(canon(r.source))??null;
   const chapters = volume?.bookData?.find(e => canon(e.id) === canon(sourceId))?.data ?? [];
-  return {book, sourceId, chapters, records, foundry, spellLookup: lookup,proficiencyItems:Object.fromEntries(raw.item.map(r=>[canon(r.name).replace(/[^a-z0-9]/g,""),{name:r.name,type:r.type,weaponCategory:r.weaponCategory,property:r.property??[],source:r.source}])),
+  return {book, sourceId, chapters, records, foundry, spellLookup: lookup,proficiencyItems:Object.fromEntries(catalog("item").map(r=>[canon(r.name).replace(/[^a-z0-9]/g,""),{name:r.name,type:r.type,weaponCategory:r.weaponCategory,property:r.property??[],source:r.source}])),
     preparationIssues: [...new Map(issues.filter(i=>canon(i.source)===canon(sourceId)||[...selected.values()].some(e=>e.kind===i.category&&canon(e.record.name)===canon(i.name)&&canon(e.record.source)===canon(i.source))).map(i => [JSON.stringify(i), i])).values()],
     dependencyReasons:[...selected.values()].filter(e=>e.record._bccDependency).map(e=>({kind:e.kind,name:e.record.name,source:e.record.source,reasons:e.record._bccDependencyReasons})),
     dependencies: Object.fromEntries(KINDS.map(k => [k, records[k].filter(r => r._bccDependency).length])),
