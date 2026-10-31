@@ -1,8 +1,14 @@
 import {canonical as lc} from "./data-model.mjs";
 export function resolveResource(index,record,name){
-  const matches=index.all.filter(e=>e.record.resources?.some(r=>lc(r.name)===lc(name))
+  // A consumption label can name either the resource pool or its owning Item.
+  // Apply grammatical singular/plural matching without assuming a class name.
+  const singular=value=>lc(value).replace(/\bdice\b/g,"die").replace(/ies$/, "y").replace(/s$/, "");
+  let matches=index.all.filter(e=>(e.record.resources?.some(r=>singular(r.name)===singular(name))||singular(e.record.name)===singular(name))
     &&(!record.className||lc(e.record.className)===lc(record.className))
     &&(!record.classSource||lc(e.record.classSource??e.record.source)===lc(record.classSource)));
+  const sameSource=matches.filter(e=>lc(e.record.source)===lc(record.classSource??record.source));
+  if(sameSource.length)matches=sameSource;
+  else if(record._bccRules){const compatible=matches.filter(e=>!e.record._bccRules||e.record._bccRules===record._bccRules);matches=compatible;}
   return matches.length===1?matches[0]:null;
 }
 /** A linked Cast activity spends the declared resource without granting a second

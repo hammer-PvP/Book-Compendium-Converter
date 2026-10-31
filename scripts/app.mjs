@@ -2,13 +2,14 @@ import {getBooks,readBook,SOURCE_ROOT} from "./source.mjs";
 import {importBook} from "./importer.mjs";
 import {prepareRules} from "./rules-policy.mjs";
 import {sourceColor} from "./source-colors.mjs";
+import {BCCExportApp} from "./export-app.mjs";
 
 const escapeHtml = v => String(v??"").replace(/[&<>"']/g,s=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[s]);
 const kindNames={race:"Species",background:"Backgrounds",feat:"Feats",optionalfeature:"Optional Features",
  class:"Classes",subclass:"Subclasses",classFeature:"Class Features",subclassFeature:"Subclass Features",
  spell:"Spells",item:"Items & Equipment",monster:"Monsters",object:"Objects",vehicle:"Vehicles"};
 export class BCCApp extends foundry.applications.api.ApplicationV2 {
-  static DEFAULT_OPTIONS={id:"bcc-book-importer",window:{title:"Book Compendium Converter · 0.0.10",resizable:true},position:{width:760,height:740}};
+  static DEFAULT_OPTIONS={id:"bcc-book-importer",window:{title:"Book Compendium Converter · 0.0.11",resizable:true},position:{width:760,height:740}};
   constructor(options={}){super(options);this.books=null;this.bookId="XPHB";this.preview=null;this.busy=false;this.status="";this.result=null;this.error="";this.importMode="create";this.progress=null;this.acknowledged=false;this.search="";this.targetRules="source";}
   async load(){
     try{this.books=(await getBooks()).slice().sort((a,b)=>a.name.localeCompare(b.name,"en",{numeric:true,sensitivity:"base"}));this.targetRules=game.settings.get("book-compendium-converter","importRules")??"source";if(!this.books.some(b=>b.id===this.bookId))this.bookId=this.books[0]?.id;this.error="";}
@@ -44,10 +45,10 @@ export class BCCApp extends foundry.applications.api.ApplicationV2 {
       <label for="bcc-target-rules">Regras de destino</label><select id="bcc-target-rules" ${this.busy?"disabled":""}><option value="source" ${this.targetRules==="source"?"selected":""}>Preservar as versões da fonte</option><option value="2024" ${this.targetRules==="2024"?"selected":""}>2024 — compatibilidade de subclasses</option><option value="2014" ${this.targetRules==="2014"?"selected":""}>2014 — preferir variantes originais</option></select>
       <p class="bcc-note">2024 prefere variantes adaptadas e reúne concessões iniciais de subclasse no nível 3. Outros recursos da classe mantêm as regras de origem. Reanalise ao mudar esta opção.</p>
         <div class="bcc-actions"><button type="button" data-action="inspect" ${this.busy||!total?"disabled":""}><i class="fas fa-magnifying-glass"></i> Analisar livro</button>
-        <button type="button" data-action="import" ${this.busy||!this.preview?"disabled":""}><i class="fas fa-box-archive"></i> Criar compêndios</button></div>
+        <button type="button" data-action="import" ${this.busy||!this.preview?"disabled":""}><i class="fas fa-box-archive"></i> Criar compêndios</button><button type="button" data-action="export" ${this.busy?"disabled":""}><i class="fas fa-file-export"></i> Exportar</button></div>
       </section>${mode}${message}${status}${progress}${preview}${after}
       <section class="bcc-warning"><h4><i class="fas fa-triangle-exclamation"></i> Versão experimental</h4>
-      <p>Cria compêndios nativos, capítulos e conversões iniciais com Advancements e vínculos locais. <strong>Não declara compatibilidade completa com Character Builder ou level-up.</strong> Ícones locais em <code>assets/srd5e</code>. Exportador planejado após a fase de validação. Teste em mundo de laboratório.</p></section>`;
+      <p>Cria e exporta compêndios nativos com Advancements e vínculos locais. <strong>Não declara compatibilidade completa com Character Builder ou level-up.</strong> Teste em mundo de laboratório.</p></section>`;
     return root;
   }
   _replaceHTML(result,content){content.replaceChildren(result);}
@@ -62,6 +63,7 @@ export class BCCApp extends foundry.applications.api.ApplicationV2 {
     root.querySelector("#bcc-import-mode")?.addEventListener("change",e=>{this.importMode=e.target.value;});
     root.querySelector('[data-action="inspect"]')?.addEventListener("click",()=>this.inspect());
     root.querySelector('[data-action="import"]')?.addEventListener("click",()=>this.importSelected());
+    root.querySelector('[data-action="export"]')?.addEventListener("click",async()=>{if(!game.user.isGM)return;const exporter=await new BCCExportApp().load(this.bookId);await exporter.render(true);});
     root.querySelector('[data-action="acknowledge"]')?.addEventListener("click",()=>{this.acknowledged=true;this.render();});
     root.querySelector('[data-action="report"]')?.addEventListener("click",()=>this.downloadReport());
   }

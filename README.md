@@ -1,4 +1,4 @@
-# Book Compendium Converter — 0.0.10 experimental
+# Book Compendium Converter — 0.0.11 experimental
 
 A local book importer targeting **Foundry VTT 14.369 / D&D5e 6.0.6**.
 This build expands native world-compendium generation. **Foundry and Character
@@ -59,6 +59,67 @@ For comparison with older versions, use a **fresh test world**. Rebuild updates 
 in the current conversion graph; it does not delete obsolete documents left by
 older conversions. Reload the world after rebuilding to refresh native spell
 list contributions.
+
+## Export an installable content module
+
+1. Click **Exportar** beside **Analisar livro** and **Criar compêndios**. The
+   exporter is available even when the local 5etools source is unavailable.
+2. Select the imported books, enter a module title, stable identifier and version,
+   and click **Validar seleção**. Export reads the current saved compendium data,
+   including manual edits; it does not rerun the source conversion.
+3. Review the included packs and automatically included World-pack dependencies.
+   Validation checks document references, supported embedded collections and
+   media bytes. Missing references, unresolved resource targets and missing files
+   block packaging. Mechanical completeness still requires gameplay testing.
+4. Click **Gerar ZIP**. Extract the contained module folder into
+   `FoundryVTT/Data/modules/`, restart Foundry, and enable the exported module in
+   a D&D5e test world. This is a local/manual distribution, without a hosted
+   update manifest. Exporting does not install or modify another world.
+
+The ZIP contains a module manifest, native LevelDB packs, their internal folders,
+deduplicated media, a validation report and a minimal resource-binding runtime.
+Internal World-compendium UUIDs and media paths are remapped to the new module.
+The D&D5e manifest flag registers the exported native spell lists. BCC, Plutonium
+and the original 5etools data are not required in the destination world. Explicit
+references to installed system/module packs remain external and required module
+dependencies are declared in the manifest. Core/system artwork remains supplied
+by Foundry/D&D5e; other referenced media is copied into the ZIP.
+
+Validation freezes a read-only snapshot, including the checked media bytes.
+Changes made after validation require validating again to include them. Export
+does not synchronize existing character inventories. Export one or several
+books per package; this version limits selected media to 512 MiB.
+
+## 0.0.11 changes
+
+- Adds the exporter above, with three equally sized main action buttons and a
+  dedicated selection/review screen. It creates fresh native LevelDB files in
+  the browser instead of copying database files that the server has open.
+- Removes all BCC World-compendium and folder deletion menu hooks. Foundry's
+  own controls are unchanged; BCC no longer adds cleanup actions.
+- Explicit multi-channel cantrip scaling tables produce separate manual damage
+  Activities with native level scaling. Weapon-hit damage and movement/secondary
+  damage stay separate; follow-up rolls do not cast the spell again. This covers
+  the supplied Booming Blade and Green-Flame Blade records through their data
+  structure, without name-specific conversion rules.
+- Explicit slot-scaled feature damage with a conditional creature bonus and
+  declared caps produces two alternate Activities sharing the source's slot
+  consumption rules. This covers the PHB Divine Smite feature without turning
+  it into the mechanically different XPHB bonus-action spell.
+- Structured consumption targets now resolve both explicit entity UIDs and named
+  resource pools to unique Items before creating Actor bindings. Ambiguous or
+  missing definitions remain reported; the exporter blocks unresolved targets.
+- The supplied Booming Blade supplemental definition contains only one damage
+  Activity. The original scaling metadata provides both channels; BCC now uses
+  that metadata to complete the conversion.
+
+Tests open generated databases with a native ClassicLevel reader, check ZIP
+extraction, UUID/media remapping, preservation of manual edits, dependency
+closure across complete XPHB/EFA/TCE conversions, standalone resource binding
+and rejection of broken content. Cantrip
+damage tables are checked at levels 1/5/11/17; conditional slot damage is checked
+at slot levels 1/2/4/9. Reimport affected books to regenerate damage Activities
+and resource references; export preserves saved documents as they are. Live installation and gameplay in Foundry remain pending.
 
 ## 0.0.10 changes
 
@@ -318,16 +379,16 @@ or Character Builder certification.
   every copy/modification mode and every supplement are not guaranteed.
 - Books represented only by unstructured prose cannot automatically become
   complete mechanical records. Missing structured data is reported.
-- No world-to-module exporter is included. That phase follows functional
-  validation of world imports.
+- Export validation checks package structure and files, not complete rules
+  automation. Live installation and character workflows require testing.
 
 ## Development and distribution
 
 Every version requires a discussed and approved scope before implementation.
 Once an approved version is prepared, publish its source and GitHub release
 automatically so it can be installed through Foundry for testing. Publication
-does not establish end-to-end validation. The current development scope is
-broader world import; exporting a selected folder and its dependencies is deferred.
+does not establish end-to-end validation. Direct online source import remains
+deferred; the exporter uses persisted World compendiums.
 
 Public source and release ZIPs must exclude book text, official mechanical
 records, artwork, third-party conversion code, test files, fixtures and QA data.

@@ -2,8 +2,9 @@ import {entitlementEffects} from "./grant-policy.mjs";
 import {addPassiveEffects} from "./passive-effects.mjs";
 import {applyRulesAdvancements} from "./rules-policy.mjs";
 import {addSummonProfiles} from "./summon-profiles.mjs";
+import {addDamageChannels} from "./damage-channels.mjs";
 import {createdResourceLinks} from "./created-resources.mjs";
-import {addResourceSpellActivities} from "./resource-spells.mjs";
+import {addResourceSpellActivities,resolveResource} from "./resource-spells.mjs";
 import {buildActor} from "./actors.mjs";
 import {prepareNativeKeys} from "./native-keys.mjs";
 import {addItemSpellActivities} from "./item-spells.mjs";
@@ -472,11 +473,13 @@ function normalizeActivities(arr,effects,index,record,report){
     for(const [ti,target] of (normalized.consumption?.targets??[]).entries())if(target.target&&typeof target.target==="object"){
       const reference=clone(target.target);
       const kind=reference.prop??reference.type;
-      const ref=index.all.find(e=>(!kind||e.kind===kind)&&canon(e.record.name)===canon(reference.name)&&(!reference.source||canon(e.record.source)===canon(reference.source))&&(!reference.className||canon(e.record.className)===canon(reference.className)));
-      if(ref)reference.uuid=ref.uuid;
+      const named=index.all.filter(e=>(!kind||e.kind===kind)&&canon(e.record.name)===canon(reference.name)&&(!reference.source||canon(e.record.source)===canon(reference.source))&&(!reference.className||canon(e.record.className)===canon(reference.className)));
+      const ref=reference.uid&&kind?lookupUid(index,kind,reference.uid,record.source):reference.consumes?.name?resolveResource(index,record,reference.consumes.name):named.length===1?named[0]:null;
+      if(ref)Object.assign(reference,{uuid:ref.uuid,name:ref.record.name,source:ref.record.source,...ref.record.className?{className:ref.record.className}:{}});
       (record._bccResourceBindings??=[]).push({activity:_id,index:ti,reference});
-      target.target=ref?.uuid??`bcc-unresolved:${reference.name??"resource"}`;
-      report.information.add(`${context}: native resource target will bind when granted to an Actor`);
+      target.target=ref?.uuid??`bcc-unresolved:${reference.consumes?.name??reference.name??reference.uid??"resource"}`;
+      if(ref)report.information.add(`${context}: native resource target will bind when granted to an Actor`);
+      else report.unresolved.add(`${context}: resource target has no unique definition (${reference.consumes?.name??reference.name??reference.uid??"unknown"})`);
     }
     if(normalized.activity?.foundryId){const id=idByFoundryId.get(normalized.activity.foundryId);if(id)normalized.activity={id};else{report.unresolved.add(`${context}: unresolved forwarded activity ${normalized.activity.foundryId}`);continue;}}
     if(a.type==="transform"&&Array.isArray(normalized.profiles))for(const profile of normalized.profiles)if(profile.uuid)profile.uuid=resolveOverlayUUID(profile.uuid,index,"monster",report,context)??"";
@@ -557,7 +560,7 @@ export async function convertOne(entry,index,content,report){
   const base={_id,name:record.name,sort:kind==="chapter" ? Number(record.sequence??0)*10000 : 0,flags:originFlags(kind,record,content.sourceId)};
   if(kind==="subclass"&&(index.byShort.get(`${kind}|${canon(record.source)}|${canon(record.name)}`)?.length??0)>1)
     base.name=`${record.name} (${record._bccRules??record.classSource})`;
-  base.flags.bcc.converterVersion="0.0.10";
+  base.flags.bcc.converterVersion="0.0.11";
   base.flags.bcc.targetRules=content.targetRules??"source";
   base.flags.bcc.sourceRules=record.edition??record._bccRules??null;
   base.flags.bcc.dependency=!!record._bccDependency;
@@ -697,6 +700,7 @@ export async function convertOne(entry,index,content,report){
     else {const pending={...sys,activities:clone(sys.activities??{})};addItemSpellActivities(record,pending,index,lookupUid,report);if(Object.keys(pending.activities??{}).length!==Object.keys(sys.activities??{}).length)report.incomplete.add(`${record.name}: supplemental activities leave attached spells unrepresented; supplement retained`);}
   }
   addResourceSpellActivities(record,sys,index,report);
+  addDamageChannels(record,sys,kind,report);
   if(kind==="spell"&&addSummonProfiles(record,sys,index,report))spellSynthesisIssues=spellSynthesisIssues.filter(s=>!s.startsWith("summoning requires Actor profiles"));
   if(kind==="classFeature"&&sys.uses?.max&&/^\d+$/.test(String(sys.uses.max))){const parent=index.all.find(e=>e.kind==="class"&&canon(e.record.name)===canon(record.className)&&canon(e.record.source)===canon(record.classSource));if(parent&&resourceScales(parent.record,index,slug).some(a=>a.configuration.identifier===slug(record.name)))sys.uses.max=`@scale.${slug(parent.record.name)}.${slug(record.name)}`;}
   if(sys.uses?.max){

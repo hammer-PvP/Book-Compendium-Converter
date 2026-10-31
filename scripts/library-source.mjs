@@ -22,6 +22,7 @@ function collectReferences(value, output = []) {
   } else if (Array.isArray(value)) value.forEach(x => collectReferences(x, output));
   else if (value && typeof value === "object") for (const [k, v] of Object.entries(value)) {
     if (k.startsWith("_bcc")) continue;
+    if(k==="uid"&&typeof v==="string"&&KINDS.includes(value.prop))output.push([value.prop,v]);
     if (["classFeature", "subclassFeature"].includes(k) && typeof v === "string") output.push([k, v]);
     if (k === "item" && typeof v === "string") output.push(["item", v]);
     collectReferences(v, output);
