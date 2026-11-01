@@ -1,3 +1,5 @@
+import {castingOptions} from "./casting-profile.mjs";
+import {variantBases,equipmentRules} from "./magic-variants.mjs";
 import {normalizeSpellRecipes} from "./spell-recipes.mjs";
 import {specialEquipmentReference} from "./equipment.mjs";
 import {parseSpellFilter,matchesSpellMetadata} from "./spell-filter.mjs";
@@ -87,18 +89,14 @@ export async function readLibraryBook(id, options = {}) {
     }
     return prepared[kind];
   }
-  const bases = new Map();
-  for (const item of data["items-base.json"]?.baseitem ?? []) {
-    const key = canon(item.name); if (!bases.has(key) || canon(item.source) === canon(sourceId)) bases.set(key, item);
-  }
   for (const variant of data["magicvariants.json"]?.magicvariant ?? []) {
     const inherit = variant.inherits ?? {}, source = inherit.source ?? variant.source;
     if (canon(source) !== canon(sourceId)) continue;
-    for (const base of bases.values()) {
+    for (const base of variantBases(data["items-base.json"]?.baseitem??[],variant,source,equipmentRules(inherit)??equipmentRules(variant)??sourceRules.get(canon(source)))) {
       if (!(variant.requires ?? []).some(r => matchesRequirements(base, r)) || (variant.excludes && matchesRequirements(base, variant.excludes))) continue;
       const out = merge(base, inherit);
       out.name = `${inherit.namePrefix ?? ""}${base.name}${inherit.nameSuffix ?? ""}`;
-      out.source = source; out._bccBaseItem = `${base.name}|${base.source}`;
+      out.source = source; out._bccRules=equipmentRules(inherit)??equipmentRules(variant)??sourceRules.get(canon(source))??equipmentRules(base); out._bccBaseRules=equipmentRules(base); out._bccBaseItem = `${base.name}|${base.source}`;
       out.entries = [...(base.entries ?? []), ...(inherit.entries ?? [])];
       delete out.namePrefix; delete out.nameSuffix; raw.item.push(out);
     }
@@ -195,6 +193,11 @@ export async function readLibraryBook(id, options = {}) {
     for (const featSet of record.feats ?? []) for (const [feat,value] of Object.entries(featSet)){
       if(feat==="any"||feat==="anyFromCategory"){for(const candidate of catalog("feat"))if(belongsToBook(candidate)&&(feat==="any"||value.category?.includes(candidate.category)))include("feat",candidate,true,reasonFor(record,"feat selector in book or required parent class"));}
       else refs.push(["feat",feat]);
+    }
+    for(const option of castingOptions(record.entries)){
+      const memberships=Object.entries(lookup??{}).map(([src,entries])=>[src,Object.entries(entries).filter(([,lists])=>Object.values(lists.class??{}).some(group=>Object.keys(group).some(name=>option.classes.includes(canon(name)))))]);
+      const rules=ruleOf(record)??sourceRules.get(canon(record.source)),base=memberships.filter(([src,rows])=>rows.length&&sourceRules.get(canon(src))===rules).sort((a,b)=>b[1].length-a[1].length)[0]?.[0];
+      for(const [src,spells]of memberships)if([canon(sourceId),canon(record.source),base].includes(src))for(const [name]of spells)await resolve('spell',`${name}|${src}`,record.source,reasonFor(record,'source-defined spellcasting option'));
     }
     const selectors=new Set();
     function recipeFilters(v){

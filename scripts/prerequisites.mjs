@@ -25,7 +25,11 @@ export function compilePrerequisites(record){
     if(["feat","feature","optionalfeature","item"].includes(key))return {any:list(value).map(v=>typeof v==="string"?{kind:"item",type:key==="item"?null:"feat",identifier:slug(v.split("|")[0].replace(/#.*$/,"")),label:v.split("|")[0]}:{kind:"unsupported",label:`Unsupported ${key} prerequisite`})};
     if(key==="ability")return {any:list(value).map(v=>({all:Object.entries(v).map(([ability,minimum])=>({kind:"ability",ability,minimum:Number(minimum),label:`${ability.toUpperCase()} ${minimum}`}))}))};
     if(key==="proficiency")return {any:list(value).map(group=>({all:Object.entries(group).map(([type,value])=>(["light","medium","heavy","shield"].includes(String(value).toLowerCase())&&type==="armor"||["simple","martial"].includes(String(value).toLowerCase())&&type==="weapon"?{kind:"proficiency",type,value,label:`${value} ${type} proficiency`}:{kind:"unsupported",label:`Unsupported ${type} proficiency: ${value}`}))}))};
-    if(key==="otherSummary"){const match=/^When Gaining the Level (\d+) (.+?) ["“](.+?)["”] Feature$/i.exec(value?.entry??"");return match?{kind:"acquisition",minimum:Number(match[1]),className:match[2],feature:slug(match[3]),label:value.entry}:{kind:"unsupported",label:value?.entry??"Special acquisition prerequisite requires review"};}
+    if(key==="campaign")return {kind:"campaign",values:list(value).map(String),label:`Campaign: ${list(value).join(' or ')}`};
+    if(key==="featCategory"||key==="exclusiveFeatCategory")return {kind:key,values:list(value).map(String),label:`Feat category ${list(value).join(' or ')}`};
+    if(key==="otherSummary"){
+      const renown=/^Renown (\d+)\+ with (?:a |an )?\{@book ([^|}]+)(?:\|[^}]+)?\}$/i.exec(value?.entry??'');
+      if(renown)return {kind:"renown",minimum:Number(renown[1]),organization:slug(renown[2]),label:value.entrySummary??value.entry};const match=/^When Gaining the Level (\d+) (.+?) ["“](.+?)["”] Feature$/i.exec(value?.entry??"");return match?{kind:"acquisition",minimum:Number(match[1]),className:match[2],feature:slug(match[3]),label:value.entry}:{kind:"unsupported",label:value?.entry??"Special acquisition prerequisite requires review"};}
     if(key==="race")return {any:list(value).map(v=>typeof v==="object"&&Object.keys(v).some(k=>!["name","source"].includes(k))?{kind:"unsupported",label:"Species prerequisite needs a lineage-aware review"}:{kind:"item",type:"race",identifier:slug(typeof v==="string"?v:v.name),label:typeof v==="string"?v:v.name})};
     if(["spellcasting","spellcasting2020","spellcastingFeature"].includes(key)&&value===true)return {kind:"spellcasting",mode:key,label:key==="spellcasting"?"Ability to cast a spell":key==="spellcasting2020"?"Spellcasting or Pact Magic Feature":"Spellcasting Feature"};
     return {kind:"unsupported",label:`Prerequisite requires review: ${key}`};
@@ -48,18 +52,39 @@ function originClass(item,items,seen=new Set()){
   for(const ref of refs){const owner=items.find(i=>{const v=raw(i),id=v._id??i.id;return id&&String(ref??"").split(".").includes(id);});if(owner){const o=raw(owner),id=o._id??owner.id;if(seen.has(id))continue;seen.add(id);if(o.type==="class")return slug(o.system?.identifier??o.name);if(o.type==="subclass"&&o.system?.classIdentifier)return slug(o.system.classIdentifier);const inherited=originClass(owner,items,seen);if(inherited)return inherited;}}
   return null;
 }
-export function prerequisiteContext(actor,{items,levels}={}){
+export function prerequisiteContext(actor,{items,levels,policyActor}={}){
   const docs=items??list(actor?.items?.contents??actor?.items),classes=new Map();
   for(const item of docs){const d=raw(item);if(d.type==="class")classes.set(slug(d.system?.identifier??d.name),Number(d.system?.levels??0));}
   for(const state of Object.values(actor?.flags??{}))if(state?.levelUpState){const s=state.levelUpState,cls=docs.find(i=>(i.id??raw(i)._id)===s.selectedClassId);if(cls)classes.set(slug(raw(cls).system?.identifier??raw(cls).name),Number(s.targetClassLevel??classes.get(slug(raw(cls).name))));}
   for(const [key,value] of Object.entries(levels??{}))classes.set(slug(key),Number(value));
-  return {actor,items:docs,classes,characterLevel:Math.max(Number(actor?.system?.details?.level??0),[...classes.values()].reduce((a,b)=>a+b,0))};
+  let worldPolicy={};try{const configured=globalThis.game?.settings?.get('world','bccPrerequisitePolicy');worldPolicy=typeof configured==='string'?JSON.parse(configured):configured??{};}catch{}
+  let actorPolicies={};try{actorPolicies=globalThis.game?.settings?.get('world','bccActorPrerequisitePolicies')??{};}catch{}
+  const sourceId=Object.values(actor?.flags??{}).find(f=>f?.isDraft&&f?.sourceActorId)?.sourceActorId;
+  const policyKey=policyActor?.uuid??(policyActor?.id?`Actor.${policyActor.id}`:null)??(sourceId?`Actor.${sourceId}`:actor?.uuid??(actor?.id?`Actor.${actor.id}`:null));
+  const policy={campaigns:worldPolicy.campaigns??[],...(actorPolicies[policyKey]??{})};
+  return {actor,items:docs,classes,policy,characterLevel:Math.max(Number(actor?.system?.details?.level??0),[...classes.values()].reduce((a,b)=>a+b,0))};
 }
 function status(qualified,reason=""){return {qualified,unsupported:false,reason:qualified?"":reason};}
 function evaluateNode(node,ctx){
   if(node.all||node.any){const rows=(node.all??node.any).map(n=>evaluateNode(n,ctx));
     if(node.all){const failed=rows.find(r=>!r.qualified&&!r.unsupported);if(failed)return failed;return rows.find(r=>r.unsupported)??status(true);}
     if(rows.some(r=>r.qualified))return status(true);return rows.find(r=>r.unsupported)??status(false,rows.map(r=>r.reason).filter(Boolean).join(" or "));
+  }
+  if(node.kind==='campaign'){
+    if(!ctx.policy.campaigns?.length)return {qualified:false,unsupported:true,reason:`GM campaign policy required: ${node.label}`};
+    return status(node.values.some(v=>ctx.policy.campaigns.map(slug).includes(slug(v))),`Requires ${node.label}`);
+  }
+  if(node.kind==='renown'){
+    const value=ctx.policy.renown?.[node.organization];if(value==null)return {qualified:false,unsupported:true,reason:`GM renown data required: ${node.label}`};
+    const score=typeof value==='number'?value:Math.max(...Object.values(value).filter(v=>typeof v==='number'));
+    return status(Number.isFinite(score)&&score>=node.minimum,`Requires ${node.label}`);
+  }
+  if(node.kind==='featCategory'||node.kind==='exclusiveFeatCategory'){
+    const candidates=ctx.items.map(raw).filter(d=>d.type==='feat'&&(d.flags?.bcc?.featCategories||d.flags?.bcc?.category==='feat'||d.system?.type?.value==='feat'));
+    const categories=d=>d.flags?.bcc?.featCategories??ctx.policy.featCategories?.[d._id]??({origin:['O'],general:['G'],fightingStyle:['FS'],epicBoon:['EB']}[d.system?.type?.subtype]);
+    const has=candidates.some(d=>list(categories(d)).some(c=>node.values.includes(c)));
+    if(node.kind==='exclusiveFeatCategory'&&!has&&candidates.some(d=>!categories(d)))return {qualified:false,unsupported:true,reason:`Feat category metadata or GM classification required: ${node.label}`};
+    return status(node.kind==='featCategory'?has:!has,node.kind==='featCategory'?`Requires ${node.label}`:`Already has ${node.label}`);
   }
   if(node.kind==="level")return status((node.className?ctx.classes.get(slug(node.className))??0:ctx.characterLevel)>=node.minimum,`Requires ${node.label}`);
   if(node.kind==="proficiency"){

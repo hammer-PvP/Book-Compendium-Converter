@@ -11,7 +11,7 @@ const kindNames={race:"Species",background:"Backgrounds",feat:"Feats",optionalfe
  class:"Classes",subclass:"Subclasses",classFeature:"Class Features",subclassFeature:"Subclass Features",
  spell:"Spells",item:"Items & Equipment",monster:"Monsters",object:"Objects",vehicle:"Vehicles"};
 export class BCCApp extends foundry.applications.api.ApplicationV2 {
-  static DEFAULT_OPTIONS={id:"bcc-book-importer",window:{title:"Book Compendium Converter · 0.1.1",resizable:true},position:{width:760,height:740}};
+  static DEFAULT_OPTIONS={id:"bcc-book-importer",window:{title:"Book Compendium Converter · 0.1.2",resizable:true},position:{width:760,height:740}};
   constructor(options={}){super(options);this.books=null;this.bookId="XPHB";this.preview=null;this.busy=false;this.status="";this.result=null;this.error="";this.importMode="create";this.progress=null;this.acknowledged=false;this.search="";this.targetRules="source";this.includeDependencies=true;this.dependencyBooks=[];}
   async load(){
     try{refreshSources();this.books=(await getBooks()).slice().sort((a,b)=>a.name.localeCompare(b.name,"en",{numeric:true,sensitivity:"base"}));this.targetRules=game.settings.get("book-compendium-converter","importRules")??"source";if(!this.books.some(b=>b.id===this.bookId))this.bookId=this.books[0]?.id;this.error="";}

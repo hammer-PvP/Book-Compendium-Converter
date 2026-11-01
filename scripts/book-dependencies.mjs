@@ -58,7 +58,7 @@ export function externalReferencesFor(doc,index){
 }
 /** Rebind only declared BCC links after the supplying book is imported. */
 export async function reconcileBookLinks(){
-  const catalog=await providerCatalog(),result={updated:0,pending:[]};
+  const catalog=await providerCatalog(),result={updated:0,pending:[],pendingDetails:[]};
   for(const pack of rows(game.packs).filter(p=>p.collection.startsWith("world.bcc-")&&["Item","Actor","JournalEntry"].includes(p.documentName))){
     const changes=[];
     for(const document of await pack.getDocuments()){
@@ -66,7 +66,7 @@ export async function reconcileBookLinks(){
       const replacements=new Map(),next=refs.map(ref=>{
         const provider=chooseProvider(catalog,ref.identity,ref.rules);
         if(provider.status==="available"){if(provider.uuid!==ref.uuid)replacements.set(ref.uuid,provider.uuid);return {...ref,uuid:provider.uuid,status:provider.status};}
-        result.pending.push(`${document.name}: ${ref.source} / ${ref.name} (${provider.status})`);return {...ref,status:provider.status};
+        result.pending.push(`${document.name}: ${ref.source} / ${ref.name} (${provider.status})`);result.pendingDetails.push({sourceId:document.flags?.bcc?.sourceId,owner:document.name,source:ref.source,name:ref.name,status:provider.status});return {...ref,status:provider.status};
       });
       if(!replacements.size&&JSON.stringify(next)===JSON.stringify(refs))continue;
       const updated=mapStrings(document.toObject(),s=>{for(const [a,b] of replacements)s=s.replaceAll(a,b);return s;});

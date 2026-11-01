@@ -87,7 +87,7 @@ export function buildEquipment(record, system, report) {
     const amount=record.rechargeAmount,all=amount==null||lc(amount)==="all";
     const formula=typeof amount==="number"||typeof amount==="string"?String(amount).replace(/\{@dice ([^}|]+).*?\}/g,"$1"):null;
     const valid=all||formula!=null&&/^[\d\sdD+*/().-]+$/.test(formula);
-    system.uses = {max,spent:0,recovery:period&&valid ? [{period,type:all?"recoverAll":"formula",...!all?{formula}:{}}] : []};
+    system.uses = {max:/\d*d\d+/i.test(max)?"":max,spent:0,recovery:period&&valid ? [{period,type:all?"recoverAll":"formula",...!all?{formula}:{}}] : []};
     if(!valid)report.incomplete.add(`${record.name}: unsupported charge-recovery formula withheld`);
     if (record.recharge && !period) report.incomplete.add(`${record.name}: unsupported recharge period ${record.recharge}`);
   }

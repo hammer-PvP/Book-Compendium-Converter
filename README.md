@@ -1,4 +1,4 @@
-# Book Compendium Converter — 0.1.1 experimental
+# Book Compendium Converter — 0.1.2 experimental
 
 An online book importer and content-module exporter targeting **Foundry VTT 14.369 / D&D5e 6.0.6**.
 This build expands native world-compendium generation. **Foundry and Character
@@ -85,7 +85,7 @@ list contributions.
 2. Select the imported books, enter a module title, stable identifier and version,
    and click **Validar seleção**. Export reads the current saved compendium data,
    including manual edits; it does not rerun the source conversion.
-3. Review the included packs and automatically included World-pack dependencies.
+3. Review the included documents and required supplier modules.
    Validation checks document references, supported embedded collections and
    media bytes. Missing references, unresolved resource targets and missing files
    block packaging. Mechanical completeness still requires gameplay testing.
@@ -107,6 +107,95 @@ Validation freezes a read-only snapshot, including the checked media bytes.
 Changes made after validation require validating again to include them. Export
 does not synchronize existing character inventories. Export one or several
 books per package; this version limits selected media to 512 MiB.
+
+## 0.1.2 changes
+
+### Character creation and class casting
+
+BCC now serializes persistent Document data before making transaction copies.
+Native compatibility accessors and live Proxy identities do not become part of
+snapshots. An unsupported persistent value is reported with its data path before
+the protected commit runs. The same normalization covers creation, level-up,
+container copies and exported runtime support.
+
+Casting profiles describe the source progression algorithm, explicit slot table,
+spell-access model, preparation data and fixed spellbook acquisitions. Optional
+Character Builder adapters interpret those profiles without changing class names
+or native slot progression. Full-list, limited-selection and spellbook access
+remain separate models. A source-defined casting-option table becomes a native
+choice: its selected feature supplies the spell list and ability. Unknown or
+unavailable lists are explicit errors, rather than a successful empty selection.
+No Character Builder files are modified. Native class and spell ownership remain
+with D&D5e and the Builder.
+
+### Separate modules and dependency scope
+
+For separate content modules, uncheck **Incluir dependências no pacote**, open
+**Plano de módulos fornecedores**, review/edit each module ID and version, and
+click **Confirmar plano de fornecedores**. Generate every supplier ZIP using
+those exact destinations, then install and enable them in the destination World.
+This permits supplements to be exported before their providers. Saving a plan
+only records destinations; it does not generate or install the provider modules.
+Changed supplier data invalidates its recorded fingerprint. Dependency cycles
+are reported: export the involved books together or include their dependencies.
+
+A genuine required document must exist in the importing World. Book-only import
+does not manufacture an absent provider. Import the required publication or use
+an appropriate foundational book with its dependencies; this does not require
+copying that foundation into every supplement. Exporting reads persisted data
+and never silently re-imports the online source to repair a missing document.
+
+With **Incluir dependências no pacote** enabled, export follows required
+documents, registered class-list pages, container trees and their folder
+ancestors. It no longer copies every unused document from a supplier pack.
+Embedded copies' provenance does not require packaging their original catalog
+record. Unavailable narrative links become readable text; executable references
+remain validated. Supplier packs receive default folders as well.
+
+### Equipment, prerequisites and diagnostics
+
+Magic-variant requirements are evaluated against source-qualified base records
+before selecting an edition-compatible equivalent. Modern properties and mastery
+are preserved; source-qualified variants are no longer silently omitted.
+
+Initial random charges are stored separately from deterministic native capacity.
+They are rolled once for each acquired physical instance, including separate
+units in a batch. Initialized copies, transaction transfers and rollback do not
+reroll. When source and supplemental Activity pools conflict, their definitions
+remain in metadata and the conflicting automatic consumption is withheld and
+reported for manual adjudication; conditional killing/charge expenditure is not
+invented. Independent, unambiguous pools keep their own behavior.
+
+Source feat-category requirements and exclusivity use category metadata. The GM
+may explicitly configure campaigns through **BCC · Política de campanha**. Actor
+qualification can be set through `game.bccRuntime.setPrerequisitePolicy(actor,
+policy)`, available to the GM. A policy can contain `campaigns`, `renown` keyed by
+the source organization identifier, and `featCategories` keyed by Item ID for
+otherwise unclassified feats. Policies are stored in GM-controlled World settings;
+Actor flags alone cannot establish qualification. Installing a book never establishes campaign or
+renown eligibility. Missing policy data remains an explicit review requirement.
+
+A sole anonymous supplemental Effect can be associated with a sole referenced
+Effect ID when there is exactly one possible non-transfer definition. Multiple
+candidates remain unresolved. This repairs missing associations without creating
+new mechanical effects or applying reading/training benefits immediately.
+
+Import diagnostics group repeated causes and put pending reconciliation from
+other publications in a separate section. Export diagnostics summarize supplier
+problems and retain affected document names in the JSON report.
+
+**Updating from 0.1.1:** rebuild affected BCC documents and regenerate **all active
+BCC content-module ZIPs** before character tests. Previously exported modules
+have their own runtime; updating BCC alone does not replace those copies. Old
+exports active alongside new ones are reported. Existing Actors are not
+synchronized. Folder defaults may require reopening the World after first
+activation; BCC does not reset the GM's compendium organization.
+
+Validation covers source-free regressions, real source conversion graphs,
+Character Builder service creation/save and selected level-up contexts, separate
+and standalone exports, and native LevelDB round trips. This is automated
+integration coverage, not a live Foundry gameplay certification. Missing upstream
+Martial Arts rider Activities and the Focused Strike Effect remain explicit.
 
 ## 0.1.1 changes
 

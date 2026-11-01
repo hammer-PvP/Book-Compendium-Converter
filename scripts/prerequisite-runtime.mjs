@@ -1,10 +1,13 @@
+import {documentData} from "./document-data.mjs";
+import {registerChargeRuntime} from "./charges.mjs";
+import {registerCastingAdapter} from "./casting-profile.mjs";
 import {evaluatePrerequisites,prerequisiteContext,prerequisiteSelectors,spellMatches} from "./prerequisites.mjs";
 import {installBatchAdapter,installCommitAdapter,prerequisiteItems,retainedAcquisition} from "./transactions.mjs";
 import {registerSpellGrantRuntime,reconcileSpellGrants} from "./spell-grants-runtime.mjs";
 import {registerContainerRuntime} from "./containers-runtime.mjs";
-const KEY=Symbol.for("bcc.prerequisites.runtime.v1"),BLOCK="bcc-prerequisite-unsatisfied";
+const KEY=Symbol.for("bcc.prerequisites.runtime.v2"),BLOCK="bcc-prerequisite-unsatisfied";
 const rows=items=>items?.contents??Array.from(items??[]);
-const object=d=>d?.toObject?d.toObject():structuredClone(d);
+const object=documentData;
 const documents=new Map(),contexts=new WeakMap(),pendingForms=new WeakMap();
 async function load(uuid){if(!String(uuid).startsWith("Compendium."))return null;if(!documents.has(uuid))documents.set(uuid,Promise.resolve(globalThis.fromUuid(uuid)).catch(()=>null));return documents.get(uuid);}
 function optionRows(value,out=[],seen=new Set()){
@@ -85,7 +88,13 @@ export async function decorateApplication(app){
   await update();
 }
 export function registerPrerequisiteRuntime(){
-  registerContainerRuntime();registerSpellGrantRuntime();
+  if(!globalThis[Symbol.for('bcc.prerequisites.policy.v1')]){
+    globalThis[Symbol.for('bcc.prerequisites.policy.v1')]=true;
+    game.settings?.register?.('world','bccPrerequisitePolicy',{name:'BCC · Política de campanha',hint:'JSON definido pelo GM. Exemplo: {"campaigns":["nome da campanha"]}. Renome individual deve ser aprovado pelo GM na política de qualificação do personagem.',scope:'world',config:true,type:String,default:'{}'});
+    game.settings?.register?.('world','bccActorPrerequisitePolicies',{scope:'world',config:false,type:Object,default:{}});
+    globalThis.game.bccRuntime??={};game.bccRuntime.setPrerequisitePolicy=async(actor,policy)=>{if(!game.user?.isGM)throw Error('GM required');const key=actor?.uuid??(actor?.id?`Actor.${actor.id}`:null);if(!key)throw Error('Persistent Actor required');const policies=game.settings.get('world','bccActorPrerequisitePolicies')??{};return game.settings.set('world','bccActorPrerequisitePolicies',{...policies,[key]:documentData(policy)});};
+  }
+  registerContainerRuntime();registerSpellGrantRuntime();registerChargeRuntime();
   installBatchAdapter(globalThis.CONFIG?.Actor?.documentClass??globalThis.Actor?.implementation);
   if(globalThis[KEY])return;globalThis[KEY]=true;
   for(const event of ["createItem","updateItem","deleteItem"])Hooks.on(event,document=>{if(document.pack)documents.delete(document.uuid);});
@@ -94,13 +103,15 @@ export function registerPrerequisiteRuntime(){
     if(!actor||actor.type!=="character"||actor.pack||!expression||options?.bccSkipPrerequisites)return;
     const projected=prerequisiteItems(actor,options);
     if(projected&&(options?.characterBuilderLevelUpRollback||options?.characterBuilderRollback)||retainedAcquisition(actor,data))return;
-    const result=evaluatePrerequisites(expression,actor,projected?{items:projected}:{});if(result.qualified)return;
+    const result=evaluatePrerequisites(expression,actor,projected?{items:projected.filter(i=>(i._id??i.id)!==data._id)}:{});if(result.qualified)return;
     ui.notifications.warn(`${data.name}: ${result.reason}`);return false;
   });
   Hooks.on("renderApplicationV2",app=>{decorateApplication(app).catch(e=>console.error("BCC | Prerequisite UI",e));});
   const connect=async()=>{
+    const stale=[...(game.modules?.values?.()??[])].filter(m=>m.active&&m.flags?.bcc?.exportVersion&&m.flags.bcc.runtimeVersion!=='0.1.2');
+    if(stale.length&&game.user?.isGM)ui.notifications.warn(`BCC: gere novamente os módulos exportados antigos antes de testar personagens: ${stale.map(m=>m.id).join(', ')}`);
     if(!game.modules?.get("dnd5e-character-builder")?.active)return;
-    try{const path=foundry.utils.getRoute?.("modules/dnd5e-character-builder/scripts/services/level-up-rules-service.mjs")??"modules/dnd5e-character-builder/scripts/services/level-up-rules-service.mjs";const {LevelUpRulesService}=await import(new URL(path,globalThis.location.href).href);if(typeof LevelUpRulesService?.buildContext==="function"&&typeof LevelUpRulesService?.apply==="function")installConsumerAdapter(LevelUpRulesService);
+    try{const path=foundry.utils.getRoute?.("modules/dnd5e-character-builder/scripts/services/level-up-rules-service.mjs")??"modules/dnd5e-character-builder/scripts/services/level-up-rules-service.mjs";const {LevelUpRulesService}=await import(new URL(path,globalThis.location.href).href);await registerCastingAdapter(path);if(typeof LevelUpRulesService?.buildContext==="function"&&typeof LevelUpRulesService?.apply==="function")installConsumerAdapter(LevelUpRulesService);
       const commitPath=path.replace("level-up-rules-service.mjs","level-up-commit-service.mjs"),{LevelUpCommitService}=await import(new URL(commitPath,globalThis.location.href).href);
       if(typeof LevelUpCommitService?.commit==="function")installCommitAdapter(LevelUpCommitService,reconcileSpellGrants);
       const {ActorCommitService}=await import(new URL(path.replace("level-up-rules-service.mjs","actor-commit-service.mjs"),globalThis.location.href).href);

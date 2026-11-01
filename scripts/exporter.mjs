@@ -1,3 +1,5 @@
+import {documentData} from "./document-data.mjs";
+import {referenceRole,containerClosure,folderClosure} from "./export-references.mjs";
 import {sha256} from "./hash.mjs";
 import {unsupportedPrerequisites} from "./prerequisites.mjs";
 import {databaseEntries,levelDatabase} from "./export-database.mjs";
@@ -9,7 +11,7 @@ import {sourceColor} from "./source-colors.mjs";
 const SUPPORTED=new Set(["Item","Actor","JournalEntry"]),MEDIA=/\.(?:webp|png|jpe?g|svg|gif|avif|ogg|mp3|wav|flac|mp4|webm)(?:[?#]|$)/i;
 const UUID=/Compendium\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z][A-Za-z0-9]*)\.([A-Za-z0-9]{16})(?:\.[A-Za-z][A-Za-z0-9]*\.[A-Za-z0-9]{16})*/g;
 const pause=()=>new Promise(r=>setTimeout(r,0));
-const plain=doc=>doc.toObject?doc.toObject(true):structuredClone(doc);
+const plain=documentData;
 const values=collection=>collection?.contents??[...(collection?.values?.()??collection??[])];
 export function exportBooks(){
   const groups=new Map();
@@ -48,10 +50,10 @@ function strings(value,fn,path=[]){
   else if(Array.isArray(value))value.forEach((v,i)=>strings(v,fn,[...path,i]));
   else if(value&&typeof value==="object")for(const [k,v] of Object.entries(value))strings(v,fn,[...path,k]);
 }
-function transform(value,fn){
-  if(typeof value==="string")return fn(value);
-  if(Array.isArray(value))return value.map(v=>transform(v,fn));
-  if(value&&typeof value==="object")return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,transform(v,fn)]));
+function transform(value,fn,path=[]){
+  if(typeof value==="string")return fn(value,path);
+  if(Array.isArray(value))return value.map((v,i)=>transform(v,fn,[...path,i]));
+  if(value&&typeof value==="object")return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,transform(v,fn,[...path,k])]));
   return value;
 }
 function mediaReferences(text){
@@ -107,6 +109,27 @@ export function deduplicatePacks(packs,report){
   if(redirects.size)report.warnings.push(`${redirects.size} cópias equivalentes consolidadas; vínculos remapeados`);
   return redirects;
 }
+function moduleReaches(start,goal,targets,seen=new Set()){
+  if(start===goal)return true;if(seen.has(start))return false;seen.add(start);
+  return Object.values(targets).filter(t=>t.moduleId===start).some(t=>(t.requires??[]).some(id=>moduleReaches(id,goal,targets,seen)));
+}
+/** Save explicit module destinations before packaging; supports any export order. */
+export async function saveExportPlan(plans){
+  if(!game.user?.isGM)throw Error('O plano de exportação requer GM.');
+  const books=exportBooks(),targets={};
+  for(const book of books){
+    const proposed=plans[book.source];if(!proposed)continue;const identity=exportIdentity(proposed);
+    for(const pack of book.packs){const loaded=await readPack(pack),folders=values(pack.folders).map(d=>cleanStats(plain(d)));
+      targets[pack.collection]={moduleId:identity.id,packName:pack.collection.slice('world.'.length),version:identity.version,fingerprint:await packFingerprint(loaded.documents,folders),documentIds:loaded.documents.map(d=>d._id),planned:true,requires:[]};
+    }
+  }
+  for(const book of books)for(const pack of book.packs){const target=targets[pack.collection];if(!target)continue;const loaded=await readPack(pack),required=new Set();
+    for(const doc of loaded.documents)strings(doc,(text,path)=>{if(referenceRole(path,doc)!=='required')return;for(const m of text.matchAll(UUID)){const dep=targets[`${m[1]}.${m[2]}`];if(dep&&dep.moduleId!==target.moduleId)required.add(dep.moduleId);}});
+    target.requires=[...required];
+  }
+  const existing=game.settings.get('book-compendium-converter','exportTargets')??{};
+  await game.settings.set('book-compendium-converter','exportTargets',{...existing,...targets});return targets;
+}
 /** Read-only snapshot of persisted compendiums. No source JSON is re-imported. */
 export async function validateExport(sources,identity,onProgress=()=>{},options={includeDependencies:true}){
   if(!game.user?.isGM)throw Error("A exportação requer usuário GM.");
@@ -115,51 +138,95 @@ export async function validateExport(sources,identity,onProgress=()=>{},options=
   const report={errors:[],warnings:[],books:books.map(b=>b.source),dependencies:[],packs:[],assets:0,documents:0,generatedAt:new Date().toISOString()};
   let exported={};try{exported=game.settings?.get("book-compendium-converter","exportTargets")??{};}catch{}
   const worldExports=new Map();
-  const pending=books.flatMap(b=>b.packs),packs=new Map(),externalModules=new Map(),references=new Set();
-  for(let i=0;i<pending.length;i++){
-    const pack=pending[i];if(packs.has(pack.collection))continue;
-    if(!SUPPORTED.has(pack.documentName)){report.errors.push(`Compêndio dependente de tipo não suportado: ${pack.collection}`);continue;}
-    onProgress(`Lendo ${pack.title??pack.collection} (${i+1}/${pending.length})...`);
-    let documents,folders;
-    try{const loaded=await readPack(pack);documents=loaded.documents;report.errors.push(...loaded.errors);folders=values(pack.folders).map(d=>cleanStats(plain(d)));}
-    catch(error){report.errors.push(`${pack.collection}: ${error.message}`);continue;}
-    if(pack.invalidDocumentIds?.size)report.errors.push(`${pack.collection}: ${pack.invalidDocumentIds.size} documentos inválidos no compêndio.`);
-    const targetName=pack.collection.slice("world.".length),row={old:pack.collection,name:targetName,label:pack.title??pack.metadata?.label??targetName,type:pack.documentName,documents,folders};
-    row.fingerprint=await packFingerprint(documents,folders);packs.set(pack.collection,row);
-    for(const doc of documents)strings(doc,(text,path)=>{
-      for(const match of text.matchAll(UUID)){
-        references.add(match[0]);const collection=`${match[1]}.${match[2]}`;
-        if(packs.has(collection)||pending.some(p=>p.collection===collection))continue;
-        const dependency=game.packs.get(collection);
-        if(match[1]==="world"){
-          if(options.includeDependencies===false&&exported[collection]&&exported[collection].moduleId!==identity.id){const target={...exported[collection]};worldExports.set(collection,target);externalModules.set(target.moduleId,{version:target.version});}
-          else if(options.includeDependencies===false)report.errors.push(`${doc.name}: exporte primeiro ${collection} em um módulo separado ou inclua suas dependências`);
-          else if(dependency&&SUPPORTED.has(dependency.documentName)){pending.push(dependency);report.dependencies.push(collection);}
-          else report.errors.push(`${doc.name}: compêndio dependente indisponível ${collection}`);
-        }else if(dependency?.metadata?.packageType==="system"||match[1]===game.system.id){/* Provided by the game system. */}
-        else if(dependency&&game.modules?.get(match[1]))externalModules.set(match[1],game.modules.get(match[1]));
-        else report.errors.push(`${doc.name}: dependência externa indisponível ${collection}`);
+  const packs=new Map(),externalModules=new Map(),references=new Set(),loaded=new Map(),scanned=new Set(),suppliers=new Map(),classLists=new Set();
+  const problems=new Map();
+  const problem=(collection,message,owner)=>{const key=`${collection}: ${message}`;if(!problems.has(key))problems.set(key,new Set());if(owner)problems.get(key).add(owner);};
+  async function load(pack){
+    if(!loaded.has(pack.collection))loaded.set(pack.collection,(async()=>{
+      if(!SUPPORTED.has(pack.documentName))throw Error(`Unsupported pack type ${pack.documentName}`);
+      onProgress(`Lendo ${pack.title??pack.collection}...`);
+      const data=await readPack(pack),folders=values(pack.folders).map(d=>cleanStats(plain(d)));
+      return {...data,folders,fingerprint:await packFingerprint(data.documents,folders)};
+    })());return loaded.get(pack.collection);
+  }
+  const pending=books.flatMap(b=>b.packs.map(pack=>({pack,all:true})));
+  for(let at=0;at<pending.length;at++){
+    if(pending.length>30000)throw Error('Dependency graph exceeds 30000 references');
+    const {pack,all,id,pageId}=pending[at];let data;
+    try{data=await load(pack);}catch(error){problem(pack.collection,error.message);continue;}
+    let row=packs.get(pack.collection);
+    if(!row){row={old:pack.collection,name:pack.collection.slice('world.'.length),label:pack.title??pack.metadata?.label??pack.collection,type:pack.documentName,documents:[],folders:[],fingerprint:data.fingerprint};packs.set(pack.collection,row);}
+    if(all){report.errors.push(...data.errors);if(pack.invalidDocumentIds?.size)problem(pack.collection,`${pack.invalidDocumentIds.size} documentos inválidos`);}
+    const wanted=all?data.documents:containerClosure(data.documents,[id]);
+    if(!all&&!wanted.some(d=>d._id===id))problem(pack.collection,`documento ausente ${id}`);
+    for(const originalDoc of wanted){
+      const doc=pageId?{...originalDoc,pages:(originalDoc.pages??[]).filter(p=>p._id===pageId)}:originalDoc;
+      const key=`${pack.collection}.${doc._id}.${pageId??'all'}`;if(scanned.has(key))continue;scanned.add(key);
+      const existing=row.documents.find(d=>d._id===doc._id);
+      if(existing){if(pageId){if(existing.pages?.some(p=>p._id===pageId))continue;existing.pages??=[];existing.pages.push(...doc.pages);}else row.documents[row.documents.indexOf(existing)]=doc;}else row.documents.push(doc);
+      if(doc.type==='class'&&doc.flags?.bcc?.castingProfile){
+        const identifier=doc.system.identifier,source=doc.flags.bcc.identity?.split('|')[1]??doc.flags.bcc.sourceId?.toLowerCase(),listKey=`${source}|${identifier}`;
+        if(!classLists.has(listKey)){
+          classLists.add(listKey);let found=false;
+          for(const book of [...new Map([...books,...exportBooks().filter(b=>b.source.toLowerCase()===source)].map(b=>[b.source,b])).values()])for(const candidate of book.packs.filter(p=>p.documentName==='JournalEntry')){
+            const lists=await load(candidate);
+            for(const journal of lists.documents)for(const page of journal.pages??[])if(page.type==='spells'&&page.system?.type==='class'&&page.system.identifier===identifier&&(!page.flags?.bcc?.classSource||page.flags.bcc.classSource.toLowerCase()===source)){
+              found=true;
+              // Separate providers must supply their registered lists with the class.
+              if(options.includeDependencies===false&&!books.some(b=>b.packs.some(p=>p.collection===candidate.collection))){const target=exported[candidate.collection];if(target&&target.moduleId!==identity.id){worldExports.set(candidate.collection,{...target});externalModules.set(target.moduleId,{version:target.version});references.add(`Compendium.${candidate.collection}.JournalEntry.${journal._id}.JournalEntryPage.${page._id}`);}else problem(candidate.collection,'associe o módulo fornecedor da lista de magias',doc.name);}
+              else {pending.push({pack:candidate,id:journal._id,pageId:page._id});if(!books.some(b=>b.packs.some(p=>p.collection===candidate.collection)))report.dependencies.push(candidate.collection);}
+            }
+          }
+          // A selected book may carry an explicitly copied parent class and its list.
+          if(!found)report.warnings.push(`${doc.name}: confira a disponibilidade da lista nativa de magias no fornecedor ${source??'desconhecido'}`);
+        }
       }
-      if(text.startsWith("bcc-unresolved:")&&!path.includes("description"))report.errors.push(`${doc.name}: recurso não resolvido ${text.slice(15)}`);
-      if(path.includes("prerequisites")&&/(?:^|:)object-object$|^\[object Object\]$/.test(text))report.errors.push(`${doc.name}: pré-requisito serializado incorretamente; reconstrua o documento com a versão atual.`);
-      if(text.includes("Actor.")||text.includes("Item.")||text.includes("JournalEntry.")){
-        if(!path.includes("flags")&&!path.includes("_stats")&&/(?:^|@UUID\[|data-uuid=["'])((?:Actor|Item|JournalEntry)\.[A-Za-z0-9]{16})(?=$|[.\]"'])/.test(text))report.errors.push(`${doc.name}: vínculo direto com documento do World; inclua uma referência de compêndio.`);
-      }
-    });
-    await pause();
+      strings(doc,(text,path)=>{
+        const role=referenceRole(path,doc);if(role!=='required')return;
+        for(const match of text.matchAll(UUID)){
+          references.add(match[0]);const collection=`${match[1]}.${match[2]}`,dependency=game.packs.get(collection);
+          if(match[1]==='world'){
+            if(books.some(b=>b.packs.some(p=>p.collection===collection))||options.includeDependencies!==false){
+              if(dependency&&SUPPORTED.has(dependency.documentName)){pending.push({pack:dependency,id:match[4]});if(!books.some(b=>b.packs.some(p=>p.collection===collection)))report.dependencies.push(collection);}
+              else problem(collection,'compêndio dependente indisponível',doc.name);
+            }else{
+              const target=exported[collection];
+              if(target&&target.moduleId!==identity.id){worldExports.set(collection,{...target});externalModules.set(target.moduleId,{version:target.version});}
+              else problem(collection,'associe o módulo fornecedor no plano de exportação ou inclua as dependências',doc.name);
+            }
+          }else if(dependency?.metadata?.packageType==='system'||match[1]===game.system.id){}
+          else if(dependency&&game.modules?.get(match[1]))externalModules.set(match[1],game.modules.get(match[1]));
+          else problem(collection,'dependência externa indisponível',doc.name);
+        }
+        if(text.startsWith('bcc-unresolved:'))problem(pack.collection,`recurso não resolvido ${text.slice(15)}`,doc.name);
+        if(path.includes('prerequisites')&&/(?:^|:)object-object$|^\[object Object\]$/.test(text))problem(pack.collection,'pré-requisito inválido; reconstrua com a versão atual',doc.name);
+        if(!path.includes('flags')&&/(?:^|@UUID\[|data-uuid=["'])((?:Actor|Item|JournalEntry)\.[A-Za-z0-9]{16})(?=$|[.\]"'])/.test(text))problem(pack.collection,'referência direta a documento do World',doc.name);
+      });
+    }
+    row.folders=folderClosure(data.folders,row.documents);await pause();
   }
   const duplicateRefs=deduplicatePacks(packs,report);
   for(const originalUuid of references){
-    const uuid=duplicateRefs.get(originalUuid)??originalUuid;
-    const parts=uuid.split("."),collection=`${parts[1]}.${parts[2]}`,row=packs.get(collection);
-    if(row){const doc=row.documents.find(d=>d._id===parts[4]);if(!doc||!embeddedExists(doc,parts.slice(5)))report.errors.push(`Documento referenciado não encontrado: ${uuid}`);}
+    const uuid=duplicateRefs.get(originalUuid)??originalUuid,parts=uuid.split('.'),collection=`${parts[1]}.${parts[2]}`,row=packs.get(collection);
+    if(row){const doc=row.documents.find(d=>d._id===parts[4]);if(!doc||!embeddedExists(doc,parts.slice(5)))problem(collection,`documento referenciado ausente ${parts.slice(3).join('.')}`);}
     else if(worldExports.has(collection)){
       const target=worldExports.get(collection),pack=game.packs.get(collection);
-      if(!target.verified){const loaded=await readPack(pack),folders=values(pack.folders).map(d=>cleanStats(plain(d)));if(await packFingerprint(loaded.documents,folders)!==target.fingerprint)report.errors.push(`Reexporte ${collection}: os documentos mudaram desde a exportação para ${target.moduleId}`);target.verified=true;}
-      try{if(!(await fromUuid(uuid)))report.errors.push(`Referência ausente: ${uuid}`);}catch(error){report.errors.push(error.message);}
+      if(!target.verified){
+        if(!pack){problem(collection,'fornecedor não está presente no World');continue;}
+        const data=await load(pack);
+        if(data.fingerprint!==target.fingerprint)problem(collection,`Reexporte ou atualize o plano: documentos mudaram desde ${target.moduleId}`);
+        if(moduleReaches(target.moduleId,identity.id,exported))problem(collection,`ciclo entre ${identity.id} e ${target.moduleId}; exporte os livros juntos ou inclua dependências`);
+        target.verified=true;suppliers.set(collection,{collection,moduleId:target.moduleId,version:target.version,planned:!!target.planned});
+      }
+      if(target.documentIds&&!target.documentIds.includes(parts[4])&&!target.redirects?.[uuid])problem(collection,`documento ${parts[4]} não consta do pacote fornecedor; exporte o livro completo ou atualize o plano`);
+      const data=await load(pack),doc=data.documents.find(d=>d._id===parts[4]);if(!doc||!embeddedExists(doc,parts.slice(5)))problem(collection,`documento ausente ${parts[4]}`);
+    }else if(parts[1]!=='world'){
+      try{if(!(await fromUuid(uuid)))problem(collection,`referência externa ausente ${uuid}`);}catch(error){problem(collection,error.message);}
     }
-    else {try{if(!(await fromUuid(uuid)))report.errors.push(`Referência externa não encontrada: ${uuid}`);}catch(error){report.errors.push(`${uuid}: ${error.message}`);}}
   }
+  report.dependencyPlan=[...suppliers.values()];report.referenceIssues=[...problems].map(([message,owners])=>({message,owners:[...owners]}));
+  report.errors.push(...report.referenceIssues.map(p=>`${p.message}${p.owners.length?` (${p.owners.length} documento(s))`:''}`));
+  report.dependencies=[...new Set(report.dependencies)];
   // Containers use sibling IDs rather than UUIDs; validate these links too.
   function containers(docs,label){
     const byId=new Map(docs.map(d=>[d._id,d]));
@@ -201,8 +268,9 @@ export async function validateExport(sources,identity,onProgress=()=>{},options=
   const aliases=new Map();for(const asset of assets.values())if(asset.path){for(const alias of asset.aliases)aliases.set(alias,`modules/${identity.id}/${asset.path}`);aliases.set(asset.source,`modules/${identity.id}/${asset.path}`);}
   const spellLists=[];
   for(const row of packs.values()){
-    row.documents=row.documents.map(d=>transform(d,text=>{
+    row.documents=row.documents.map(d=>transform(d,(text,path)=>{
       text=text.replace(UUID,uuid=>duplicateRefs.get(uuid)??uuid);
+      if(referenceRole(path,d)==="descriptive")text=text.replace(/@UUID\[([^\]]+)\](?:\{([^}]+)\})?/g,(tag,uuid,label)=>{const parts=uuid.split("."),collection=`${parts[1]}.${parts[2]}`;if(parts[0]==="Compendium"&&parts[1]==="world"&&!packs.get(collection)?.documents.some(d=>d._id===parts[4])&&!worldExports.has(collection))return label??"Reference";return tag;});
       let out=text.replace(UUID,(uuid,owner,name)=>worldExports.get(`${owner}.${name}`)?.redirects?.[uuid]??(worldExports.has(`${owner}.${name}`)?uuid.replace(`Compendium.${owner}.${name}.`,`Compendium.${worldExports.get(`${owner}.${name}`).moduleId}.${worldExports.get(`${owner}.${name}`).packName}.`):owner==="world"&&packs.has(`${owner}.${name}`)?uuid.replace(`Compendium.${owner}.${name}.`,`Compendium.${identity.id}.${packs.get(`${owner}.${name}`).name}.`):uuid));
       if(aliases.has(out))return aliases.get(out);
       if(/[<>]/.test(out))out=out.replace(/\b(src|href|poster)\s*=\s*(["'])([^"']+)\2/gi,(m,key,quote,path)=>aliases.has(path)?`${key}=${quote}${aliases.get(path)}${quote}`:m);
@@ -214,8 +282,9 @@ export async function validateExport(sources,identity,onProgress=()=>{},options=
   if(externalModules.size)report.warnings.push(`Requer módulos externos: ${[...externalModules.keys()].join(", ")}`);
   report.warnings.push("A validação confere estrutura, referências e arquivos. Mecânicas e Activities precisam de testes no Foundry.");
   report.errors=[...new Set(report.errors)];report.assets=new Set([...assets.values()].map(a=>a.path).filter(Boolean)).size;report.assetBytes=totalBytes;
-  const manifest={id:identity.id,title:identity.title,version:identity.version,description:"Native D&D5e compendiums exported from Book Compendium Converter.",authors:[{name:game.user.name??"Game Master"}],compatibility:{minimum:"14.369",verified:"14.369"},relationships:{systems:[{id:"dnd5e",type:"system",compatibility:{minimum:"6.0.6"}}],...(externalModules.size?{requires:[...externalModules].map(([id,module])=>({id,type:"module",compatibility:{minimum:module.version}}))}:{})},packs:[...packs.values()].map(p=>({name:p.name,label:p.label,path:`packs/${p.name}`,type:p.type,system:"dnd5e",flags:{bcc:{exported:true}}})),packFolders:books.map(b=>({name:b.name,color:b.color,sorting:"a",packs:b.packs.map(p=>packs.get(p.collection)?.name).filter(Boolean)})),esmodules:["scripts/runtime.mjs"],flags:{dnd5e:{spellLists},bcc:{exportVersion:1,books:report.books}}};
-  return {manifest,packs,assets,report,hierarchy:embeddedHierarchy(),exportTargets:Object.fromEntries([...packs.values()].map(row=>[row.old,{moduleId:identity.id,packName:row.name,version:identity.version,fingerprint:row.fingerprint,redirects:Object.fromEntries([...duplicateRefs].filter(([uuid])=>uuid.startsWith(`Compendium.${row.old}.`)).map(([a,b])=>[a,b.replace(/^Compendium\.world\.([^.]+)\./,`Compendium.${identity.id}.$1.`)]))}]))};
+  const assigned=new Set(exportBooks().flatMap(b=>b.packs.map(p=>p.collection))),extra=[...packs.values()].filter(row=>!assigned.has(row.old)).map(row=>row.name);
+  const manifest={id:identity.id,title:identity.title,version:identity.version,description:"Native D&D5e compendiums exported from Book Compendium Converter.",authors:[{name:game.user.name??"Game Master"}],compatibility:{minimum:"14.369",verified:"14.369"},relationships:{systems:[{id:"dnd5e",type:"system",compatibility:{minimum:"6.0.6"}}],...(externalModules.size?{requires:[...externalModules].map(([id,module])=>({id,type:"module",compatibility:{minimum:module.version}}))}:{})},packs:[...packs.values()].map(p=>({name:p.name,label:p.label,path:`packs/${p.name}`,type:p.type,system:"dnd5e",flags:{bcc:{exported:true}}})),packFolders:exportBooks().map(b=>({name:b.name,color:b.color,sorting:"a",packs:b.packs.map(p=>packs.get(p.collection)?.name).filter(Boolean)})).filter(b=>b.packs.length).concat(extra.length?[{name:"Dependencies",sorting:"a",packs:extra}]:[]),esmodules:["scripts/runtime.mjs"],flags:{dnd5e:{spellLists},bcc:{exportVersion:2,runtimeVersion:"0.1.2",books:report.books}}};
+  return {manifest,packs,assets,report,hierarchy:embeddedHierarchy(),exportTargets:Object.fromEntries([...packs.values()].filter(row=>books.some(b=>b.packs.some(p=>p.collection===row.old))).map(row=>[row.old,{moduleId:identity.id,packName:row.name,version:identity.version,fingerprint:row.fingerprint,requires:[...externalModules.keys()],documentIds:row.documents.map(d=>d._id),redirects:Object.fromEntries([...duplicateRefs].filter(([uuid])=>uuid.startsWith(`Compendium.${row.old}.`)).map(([a,b])=>[a,b.replace(/^Compendium\.world\.([^.]+)\./,`Compendium.${identity.id}.$1.`)]))}]))};
 }
 export async function buildExport(snapshot,onProgress=()=>{}){
   if(!game.user?.isGM)throw Error("A exportação requer usuário GM.");
@@ -233,7 +302,7 @@ export async function buildExport(snapshot,onProgress=()=>{}){
   for(const asset of snapshot.assets.values()){if(seen.has(asset.path))continue;seen.add(asset.path);onProgress(`Incluindo mídia ${++count}/${snapshot.report.assets}...`);await zip.add(`${root}/${asset.path}`,asset.blob);await pause();}
   const runtimeResponse=await fetch(foundry.utils.getRoute?.("modules/book-compendium-converter/scripts/export-runtime.mjs")??"modules/book-compendium-converter/scripts/export-runtime.mjs",{credentials:"same-origin"});if(!runtimeResponse.ok)throw Error("Não foi possível carregar o suporte do módulo exportado.");
   await zip.add(`${root}/scripts/runtime.mjs`,await runtimeResponse.text(),{compress:true});
-  for(const file of ["prerequisite-runtime.mjs","prerequisites.mjs","spell-filter.mjs","containers-runtime.mjs","transactions.mjs","spell-grants-runtime.mjs","resource-bindings.mjs"]){const response=await fetch(foundry.utils.getRoute?.(`modules/book-compendium-converter/scripts/${file}`)??`modules/book-compendium-converter/scripts/${file}`,{credentials:"same-origin"});if(!response.ok)throw Error(`Não foi possível carregar ${file}`);await zip.add(`${root}/scripts/${file}`,await response.text(),{compress:true});}
+  for(const file of ["prerequisite-runtime.mjs","prerequisites.mjs","spell-filter.mjs","containers-runtime.mjs","transactions.mjs","spell-grants-runtime.mjs","resource-bindings.mjs","document-data.mjs","casting-profile.mjs","charges.mjs"]){const response=await fetch(foundry.utils.getRoute?.(`modules/book-compendium-converter/scripts/${file}`)??`modules/book-compendium-converter/scripts/${file}`,{credentials:"same-origin"});if(!response.ok)throw Error(`Não foi possível carregar ${file}`);await zip.add(`${root}/scripts/${file}`,await response.text(),{compress:true});}
   await zip.add(`${root}/export-report.json`,JSON.stringify(snapshot.report,null,2),{compress:true});
   await zip.add(`${root}/README.md`,`# ${snapshot.manifest.title}\n\nExtract this folder to FoundryVTT/Data/modules/${root}/, restart Foundry and enable the module in a D&D5e world. Native compendiums and spell lists are provided without BCC, Plutonium or local 5etools data. Any external module dependencies are listed in module.json. Existing Actor inventories are not synchronized.\n\nThis package contains a snapshot of the validated compendium documents; it does not certify mechanical completeness.\n`);
   if(game.settings?.set){let targets={};try{targets=game.settings.get("book-compendium-converter","exportTargets")??{};}catch{}await game.settings.set("book-compendium-converter","exportTargets",{...targets,...snapshot.exportTargets});}

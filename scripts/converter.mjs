@@ -1,3 +1,6 @@
+import {parseSpellFilter,matchesSpellMetadata} from "./spell-filter.mjs";
+import {configureCharges} from "./charges.mjs";
+import {castingProfile,castingOptions} from "./casting-profile.mjs";
 import {applyDependencyPolicy} from "./book-dependencies.mjs";
 import {compilePrerequisites,spellMetadata,unsupportedPrerequisites} from "./prerequisites.mjs";
 import {stableId as idFor} from "./hash.mjs";
@@ -75,12 +78,17 @@ export async function buildIndex(content, destination = WORLD_DESTINATION) {
   await prepareNativeKeys();
   const graph = speciesGraph(content.records.race);
   const extraOptions=[];
-  const records = {...content.records, race:graph.races.map(clone), raceFeature: graph.features,
+  const records = {...content.records,class:(content.records.class??[]).map(clone),optionalfeature:(content.records.optionalfeature??[]).map(clone), race:graph.races.map(clone), raceFeature: graph.features,
     spellList:[],
     chapter: content.chapters.map((entry, i) => ({name: entry.name || `Section ${i + 1}`, source:content.sourceId,
       page: entry.page, entries: entry.entries, chapter: entry, sequence:i}))};
+  for(const cls of records.class){
+    const features=records.classFeature.filter(f=>canon(f.className)===canon(cls.name)&&canon(f.classSource)===canon(cls.source));
+    const options=castingOptions(features.flatMap(f=>f.entries??[]));if(!options.length)continue;cls._bccCastingOptions=options;
+    for(const option of options)records.optionalfeature.push({name:`${cls.name}: ${option.label}`,source:cls.source,edition:cls.edition,_bccRules:cls._bccRules,_bccDependency:cls._bccDependency,_bccAuxiliary:true,entries:[],_bccCastingRole:{...option,classIdentifier:sourceIdentifier("class",cls,content),classSource:cls.source}});
+  }
   const lists=[];
-  for(const [kind,rows] of [["class",records.class],["subclass",records.subclass]])for(const r of rows)if((content.includeDependencies!==false||!r._bccDependency)&&(r.casterProgression||r.additionalSpells?.some(b=>b.expanded)))lists.push({pageId:await idFor(`spell-list:${entityKey(kind,r)}`),name:r.name,source:r.source,_bccRules:r._bccRules,identifier:r.foundryIdentifier??findSupplement(kind,r,content.foundry)?.identifier??slug(r.name),className:r.className??r.name,classSource:r.classSource??r.source,ownerName:r.name,listType:kind,additionalSpells:clone(r.additionalSpells??[])});
+  for(const [kind,rows] of [["class",records.class],["subclass",records.subclass]])for(const r of rows)if((content.includeDependencies!==false||!r._bccDependency)&&(r.casterProgression||r.additionalSpells?.some(b=>b.expanded)))lists.push({pageId:await idFor(`spell-list:${entityKey(kind,r)}`),name:r.name,source:r.source,_bccRules:r._bccRules,identifier:r.foundryIdentifier??findSupplement(kind,r,content.foundry)?.identifier??slug(r.name),className:r.className??r.name,classSource:r.classSource??r.source,ownerName:r.name,listType:kind,additionalSpells:clone(r.additionalSpells??[]),castingOptions:r._bccCastingOptions??[]});
   if(lists.length)records.spellList.push({name:"Spell Lists",source:content.sourceId,lists});
   for(const [kind,rows] of Object.entries(records))if(kind!=="spellList")for(const record of rows){
     if((record.additionalSpells?.length??0)>1){
@@ -393,6 +401,7 @@ function applyAdditionalSpellChoices(record,index,adv,report,overlay,kind){
 
 const classProgress = r=>({progression: r.casterProgression==="pact"?"pact":({"1/2":"half","1/3":"third"}[r.casterProgression]??r.casterProgression??"none"),ability:r.spellcastingAbility??""});
 const classifyItem = itemType;
+function sourceIdentifier(kind,record,content){return record.foundryIdentifier??findSupplement(kind,record,content.foundry)?.identifier??slug(record.name);}
 function getOverlay(kind,record,foundry){return findSupplement(kind,record,foundry);}
 // 5etools supplements use their own foundryId and @spell/@creature references.
 // Convert them to native, typed Foundry UUIDs and 16-character activity IDs BEFORE persistence.
@@ -460,9 +469,15 @@ function normalizeActivities(arr,effects,index,record,report){
   // exactly one condition and exactly one missing effect. Other gaps remain explicit.
   const requested=[...new Set(source.flatMap(a=>(a.effects??[]).map(refId)).filter(Boolean))];
   const missing=requested.filter(id=>!effects.some(e=>e.flags?.bcc?.foundryId===id));
+  const anonymous=effects.filter(e=>!e.flags?.bcc?.foundryId&&e.transfer===false&&(e.system?.changes?.length??0)>0);
+  if(requested.length===1&&missing.length===1&&effects.length===1&&anonymous.length===1){
+    anonymous[0].flags.bcc.foundryId=missing[0];
+    report.information.add(`${record.name}: sole anonymous supplemental Effect bound to the sole requested effect reference`);
+    (report.recoveredReferences??=[]).push({owner:record.name,source:record.source,kind:'Effect',reference:missing[0],method:'unique-anonymous-definition'});
+  }
   const statuses=[...new Set([...JSON.stringify(record.entries??[]).matchAll(/\{@condition\s+([^}|]+)/gi)].map(m=>canon(m[1])))];
   const known=new Set((globalThis.CONFIG?.statusEffects??[]).map(e=>e.id));
-  if(missing.length===1&&statuses.length===1&&known.has(statuses[0])&&source.some(a=>a.type==="save"&&(a.effects??[]).some(e=>refId(e)===missing[0]))){
+  if(missing.length===1&&!effects.some(e=>e.flags?.bcc?.foundryId===missing[0])&&statuses.length===1&&known.has(statuses[0])&&source.some(a=>a.type==="save"&&(a.effects??[]).some(e=>refId(e)===missing[0]))){
     const id=`eff${String(effects.length+1).padStart(13,"0")}`;
     effects.push({_id:id,name:record.name,type:"base",disabled:false,transfer:false,statuses,system:{changes:[]},flags:{bcc:{foundryId:missing[0],sourceCondition:true}}});
     report.information.add(`${record.name}: missing supplemental effect recovered from the single explicit source condition ${statuses[0]}`);
@@ -566,13 +581,16 @@ export async function convertOne(entry,index,content,report){
   const base={_id,name:record.name,sort:kind==="chapter" ? Number(record.sequence??0)*10000 : 0,flags:originFlags(kind,record,content.sourceId)};
   if(kind==="subclass"&&(index.byShort.get(`${kind}|${canon(record.source)}|${canon(record.name)}`)?.length??0)>1)
     base.name=`${record.name} (${record._bccRules??record.classSource})`;
-  base.flags.bcc.converterVersion="0.1.1";
+  base.flags.bcc.converterVersion="0.1.2";
   base.flags.bcc.targetRules=content.targetRules??"source";
   base.flags.bcc.sourceRules=record.edition??record._bccRules??null;
   base.flags.bcc.dependency=!!record._bccDependency;
   if(record._bccDependencyReasons?.length)base.flags.bcc.dependencyReasons=clone(record._bccDependencyReasons);
+  if(record._bccCastingRole){const role=record._bccCastingRole,pool=preferredCandidates(role.classes.flatMap(name=>spellRefsForClass(index,name,role.classSource)).filter(e=>matchesSpellMetadata(e.record,parseSpellFilter(role.filter))),record);base.flags.bcc.castingRole={...role,spells:pool.map(e=>e.uuid),identifiers:pool.map(e=>sourceIdentifier("spell",e.record,content))};}
   if(record.resources?.length)base.flags.bcc.resourceAliases=record.resources.map(r=>r.name).filter(Boolean);
+  if(kind==="feat"&&record.category)base.flags.bcc.featCategories=Array.isArray(record.category)?record.category:[record.category];
   if(record.prerequisite){base.flags.bcc.prerequisites=clone(record.prerequisite);base.flags.bcc.prerequisiteExpression=compilePrerequisites(record);for(const issue of unsupportedPrerequisites(base.flags.bcc.prerequisiteExpression))report.incomplete.add(`${record.name}: ${issue}`);}
+  if(kind==="class"||kind==="subclass"){const profile=castingProfile(record);if(profile)base.flags.bcc.castingProfile=profile;if(profile?.unsupported)report.incomplete.add(`${record.name}: unsupported casting progression ${profile.unsupported}`);}
   if(kind==="spell")base.flags.bcc.spellMetadata=spellMetadata(record,index);
   if(kind==="race")base.flags.bcc.speciesIdentifiers=[...new Set([record.name,record._bccVariantOf?.name,record.raceName,record._baseName].filter(Boolean).map(slug))];
   if(record._bccSpellReplacements)base.flags.bcc.spellReplacements=clone(record._bccSpellReplacements);
@@ -581,8 +599,8 @@ export async function convertOne(entry,index,content,report){
   }
   if(kind==="spellList"){
     return {...base,pages:record.lists.map(list=>{
-      const spells=list.listType==="subclass"?expandedSpellPool(list,index,spellRefsForClass,lookupUid,report):spellRefsForClass(index,list.ownerName,list.classSource);
-      return {_id:list.pageId,name:list.ownerName,type:"spells",system:{type:list.listType,identifier:list.identifier,grouping:"level",description:{value:""},spells:preferredCandidates(spells,list).map(e=>e.uuid),unlinkedSpells:[]}};
+      const spells=list.castingOptions?.length?[...new Map(list.castingOptions.flatMap(o=>o.classes.flatMap(name=>spellRefsForClass(index,name,list.classSource)).filter(e=>matchesSpellMetadata(e.record,parseSpellFilter(o.filter)))).map(e=>[e.uuid,e])).values()]:list.listType==="subclass"?expandedSpellPool(list,index,spellRefsForClass,lookupUid,report):spellRefsForClass(index,list.ownerName,list.classSource);
+      return {_id:list.pageId,name:list.ownerName,type:"spells",flags:{bcc:{classSource:list.classSource}},system:{type:list.listType,identifier:list.identifier,grouping:"level",description:{value:""},spells:preferredCandidates(spells,list).map(e=>e.uuid),unlinkedSpells:[]}};
     })};
   }
   if(["monster","object","vehicle"].includes(kind))return buildActor(entry,index,content,report,{convert:convertOne,lookup:lookupUid,render:renderEntries});
@@ -605,6 +623,7 @@ export async function convertOne(entry,index,content,report){
   } else if(kind==="class"){
     sys.hd={denomination:`d${record.hd?.faces??8}`};
     sys.spellcasting=classProgress(record);
+    if(record._bccCastingOptions?.length){const pool=record._bccCastingOptions.map(o=>lookupUid(index,'optionalfeature',`${record.name}: ${o.label}|${record.source}`,record.source)).filter(Boolean);addAdv(adv,choiceAdv('Choose Spellcasting Option',1,itemChoiceConfig(pool,{'1':{count:1,replacement:false}},'feat'),{kind:'castingRole'}));}
     addProgressionScales(record,adv,addAdv,slug);
     if(kind==="class")for(const scale of resourceScales(record,index,slug))addAdv(adv,scale);
     const primaryAdd=(target,value)=>addAdv(target,{...value,classRestriction:"primary"});
@@ -718,6 +737,7 @@ export async function convertOne(entry,index,content,report){
   }
   if(sys.uses?.per){if(!sys.uses.recovery?.length)sys.uses.recovery=[{period:sys.uses.per,type:"recoverAll"}];delete sys.uses.per;}
   if(sys.uses?.max)for(const a of Object.values(sys.activities??{}))if(a.type!=="cast"&&!a.consumption?.targets?.length && a.activation?.type)a.consumption={targets:[{type:"itemUses",value:"1"}]};
+  if(!sys.uses?.max&&Object.values(sys.activities??{}).some(a=>(a.consumption?.targets??[]).some(t=>t.type==='itemUses'&&!t.target&&Number(t.value)>0)))report.incomplete.add(`${record.name}: source Activity consumes local item uses but defines no item capacity; manual resource review required`);
   if(record._bccResourceBindings?.length)base.flags.bcc.resourceBindings=[...new Map(record._bccResourceBindings.map(b=>[JSON.stringify(b),clone(b)])).values()];
   if(kind==="spell")for(const issue of spellSynthesisIssues)
     report.incomplete.add(`${record.name}: ${issue}`);
@@ -738,12 +758,16 @@ export async function convertOne(entry,index,content,report){
   if(Object.keys(adv).length)sys.advancement=adv;
   const documentType=overlay?.type??record.foundryType??(kind==="raceFeature"||["classFeature","subclassFeature","optionalfeature"].includes(kind)?"feat":
     kind==="item"?classifyItem(record):PACK_DEFS[kind][3]);
+  if(kind==="item")configureCharges(record,sys,base.flags.bcc,report);
   if(kind==="spell" && !Object.keys(sys.activities??{}).length)report.incomplete.add(`${record.name}: spell has no native Activity`);
   return {...base,type:documentType,system:sys,...effects.length?{effects}:{} };
 }
 export function createReport(content){return {sourceContext:content.sourceContext,includeDependencies:content.includeDependencies!==false,externalDependencies:content.externalDependencies??[],dependencyReasons:content.dependencyReasons??[],information:new Set(),preparationWarnings:[],dependencies:content.dependencies??{},preparationIssues:content.preparationIssues??[],sourceId:content.sourceId,counts:{...content.counts},
   created:{},updated:{},existing:{},errors:[],warnings:[],validationFailures:[],unresolved:new Set(),incomplete:new Set((content.preparationIssues??[]).map(i=>`${i.category} / ${i.name}: ${i.message}`)),unlocalizedImages:new Set()};}
+export function groupDiagnostics(messages){
+  const groups=new Map();for(const message of messages){const text=String(message),at=text.indexOf(': '),owner=at<0?'':text.slice(0,at),cause=at<0?text:text.slice(at+2);if(!groups.has(cause))groups.set(cause,{cause,count:0,owners:[]});const group=groups.get(cause);group.count++;if(owner&&!group.owners.includes(owner))group.owners.push(owner);}return [...groups.values()];
+}
 export function finalizeReport(report){return {...report,information:[...report.information],unresolved:[...report.unresolved],incomplete:[...report.incomplete],unlocalizedImages:[...report.unlocalizedImages],
-  diagnostics:{persistenceErrors:report.errors.length,unresolvedReferences:report.unresolved.size,partialMechanics:report.incomplete.size,sourceDefinitionGaps:report.sourceDefinitionGaps??[],imageDownloadFailures:report.assets?.failures?.length??0,imagesUnresolved:report.assets?.unresolved?.length??0,genericPrerequisitesSupported:[...report.information].filter(s=>s.includes("generic runtime")||s.includes("generic evaluator")).length},
+  diagnostics:{groups:{unresolved:groupDiagnostics(report.unresolved),incomplete:groupDiagnostics(report.incomplete)},otherBooksPending:(report.reconciliation?.pendingDetails??[]).filter(d=>d.sourceId!==report.sourceId),persistenceErrors:report.errors.length,unresolvedReferences:report.unresolved.size,partialMechanics:report.incomplete.size,sourceDefinitionGaps:report.sourceDefinitionGaps??[],recoveredReferences:report.recoveredReferences??[],imageDownloadFailures:report.assets?.failures?.length??0,imagesUnresolved:report.assets?.unresolved?.length??0,genericPrerequisitesSupported:[...report.information].filter(s=>s.includes("generic runtime")||s.includes("generic evaluator")).length},
   generatedAt:new Date().toISOString()};}
 export { PACK_DEFS };

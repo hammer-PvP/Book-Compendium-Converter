@@ -27,10 +27,10 @@ Hooks.once("ready",()=>{
       if(app.rendered){app.bringToFront();return app;}
       await app.load();await app.render(true);return app;
     },
-    getBooks,readBook,version:"0.1.1"
+    getBooks,readBook,version:"0.1.2"
   };
   // The sidebar may already be rendered before the ready hook.
   injectBCCShortcut(null,ui.compendium?.element);
-  console.info("BCC 0.1.1 | Ready. Acesse pelo botão na aba Compêndios ou game.bcc.open()");
+  console.info("BCC 0.1.2 | Ready. Acesse pelo botão na aba Compêndios ou game.bcc.open()");
 });
 Hooks.on("renderCompendiumDirectory",injectBCCShortcut);

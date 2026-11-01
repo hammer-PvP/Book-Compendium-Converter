@@ -1,3 +1,4 @@
+import {documentData} from "./document-data.mjs";
 const KEY=Symbol.for("bcc.containers.runtime.v1");
 /** Native containers have quantity 1. Consumers may request several units in a
  * transformer; split each unit and its contents before document creation. */
@@ -11,7 +12,7 @@ export function splitContainerInstances(data,randomId){
     const tree=[root];for(let at=0;at<tree.length;at++)for(const child of out)if(child.system?.container===tree[at]._id&&!tree.includes(child))tree.push(child);
     for(let n=1;n<quantity;n++){
       const ids=new Map(tree.map(d=>[d._id,randomId()]));
-      for(const doc of tree){const copy=structuredClone(doc);copy._id=ids.get(doc._id);if(ids.has(copy.system?.container))copy.system.container=ids.get(copy.system.container);out.push(copy);}
+      for(const doc of tree){const copy=documentData(doc);copy._id=ids.get(doc._id);if(ids.has(copy.system?.container))copy.system.container=ids.get(copy.system.container);out.push(copy);}
     }
   }
   return out;

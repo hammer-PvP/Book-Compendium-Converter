@@ -225,7 +225,7 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
   for(const issue of await saveSpellLists(verifiedLists))report.incomplete.add(`Spell-list registration ${issue.uuid}: ${issue.message}`);
   if(options.mode!=="create")report.information.add("Reload Foundry after rebuilding to refresh the native spell-list registry. Obsolete packs and documents are not automatically removed.");
   if(content.sourceContext)report.sourceContext={token:content.sourceContext.token,...getSourceSession(content).metadata};
-  if(content.includeDependencies===false){const reconciliation=await reconcileBookLinks();for(const issue of reconciliation.pending)report.unresolved.add(issue);report.information.add(`${reconciliation.updated} documents rebound to available book dependencies`);}
+  if(content.includeDependencies===false){const reconciliation=await reconcileBookLinks();report.reconciliation=reconciliation;for(const issue of reconciliation.pendingDetails.filter(d=>d.sourceId===content.sourceId))report.unresolved.add(`${issue.owner}: ${issue.source} / ${issue.name} (${issue.status})`);report.information.add(`${reconciliation.updated} documents rebound to available book dependencies`);}
   else await reconcileBookLinks();
   report.countDocuments=total;
   report.persistedTotal=Object.values(report.created).reduce((a,b)=>a+b,0)+Object.values(report.updated).reduce((a,b)=>a+b,0)+
