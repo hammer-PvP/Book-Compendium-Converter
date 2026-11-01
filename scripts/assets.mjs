@@ -13,11 +13,11 @@ const CATEGORY_CORE={A:"icons/weapons/ammunition/arrow-simple.webp",AF:"icons/we
 export function imageSource(value){
   if(typeof value!=="string"||!value.trim())return null;
   let path=value.trim().replaceAll("\\","/").replace(/^Data\//i,"");
-  if(/^(?:https?):\/\//i.test(path)){try{const u=new URL(path);if(u.username||u.password)return null;u.hash="";return u.href;}catch{return null;}}
+  if(/^(?:https?):\/\//i.test(path)){try{const u=new URL(path);if(u.username||u.password)return null;u.hash="";return u.href.replace(/%[0-9a-f]{2}/gi,m=>m.toUpperCase());}catch{return null;}}
   if(/^[a-z][a-z\d+.-]*:/i.test(path)||path.startsWith("//"))return null;
   path=path.replace(/^\//,"");
   let decoded;try{decoded=decodeURIComponent(path);}catch{return null;}
-  return decoded.split("/").some(p=>p==="..")||/[\x00-\x1f]/.test(path)?null:path;
+  return decoded.split("/").some(p=>p==="..")||/[\x00-\x1f]/.test(decoded)?null:decoded;
 }
 
 function href(image,root){
@@ -89,7 +89,7 @@ export class AssetImporter{
     for(const image of images){const source=href(image,this.root);if(source&&(this.artworkAvailable||/^https?:\/\//i.test(source)))out.push({source,via:inherited?"inherited":"artwork"});}
     if(portraits)out.push(...matched);
     if(kind==="monster"&&r.hasToken){
-      const token=r.token??{},source=token.source??r.source,name=token.name??r.name;
+      const token=r.token??{},base=r._bccVariantOf??r._bccCopyOf,source=token.source??base?.source??r.source,name=token.name??base?.name??r.name;
       if(this.artworkAvailable)out.push({source:`${this.root.replace(/\/$/,"")}/bestiary/tokens/${source}/${name}.webp`,via:"token"});
     }
     if(kind==="item"&&CATEGORY_CORE[String(r.type).split("|")[0]])out.push({source:CATEGORY_CORE[String(r.type).split("|")[0]],via:"category"});
@@ -154,7 +154,7 @@ export class AssetImporter{
     }
     for(const [i,e] of (doc.effects??[]).entries()){const path=await this.field(doc,`effects.${e._id??i}.img`,[{source:e.img??"icons/svg/aura.svg",via:"effect"}],files);if(path)e.img=path;}
     if(doc.prototypeToken){const media=kind==="object"?"objects":kind==="vehicle"?"vehicles":"bestiary";
-      const token=r.token?.name&&r.token?.source?`${this.root.replace(/\/$/,"")}/${media}/tokens/${r.token.source}/${r.token.name}.webp`:typeof r.token==="string"?r.token:r.hasToken&&this.artworkAvailable?`${this.root.replace(/\/$/,"")}/${media}/tokens/${r.source}/${r.name}.webp`:null;
+      const token=r.token?.name&&r.token?.source?`${this.root.replace(/\/$/,"")}/${media}/tokens/${r.token.source}/${r.token.name}.webp`:typeof r.token==="string"?r.token:r.hasToken&&this.artworkAvailable?`${this.root.replace(/\/$/,"")}/${media}/tokens/${(r._bccVariantOf??r._bccCopyOf)?.source??r.source}/${(r._bccVariantOf??r._bccCopyOf)?.name??r.name}.webp`:null;
       const source=r.tokenUrl??href(r.tokenHref,this.root)??token??doc.prototypeToken.texture?.src;const candidates=source?[{source,via:"token"},...doc.img?[{source:doc.img,via:"portrait"}]:[]]:doc.img?[{source:doc.img,via:"portrait"}]:[];if(candidates.length){const path=await this.field(doc,"prototypeToken.texture.src",candidates,files);if(path){doc.prototypeToken.texture??={};doc.prototypeToken.texture.src=path;}}}
     if(files.length){doc.flags??={};doc.flags.bcc??={};doc.flags.bcc.assets={version:1,root:ASSET_ROOT,files};}
     for(const item of doc.items??[]){const ref=this.refs.get(item._stats?.compendiumSource??item.flags?.bcc?.actorOrigin)??{kind:"monsterFeature",record:{name:item.name,source:r.source,_bccRules:rules(r),_bccImageParent:{kind,name:r.name,source:r.source}}};await this.apply(item,ref);}

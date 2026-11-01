@@ -1,3 +1,4 @@
+import {externalReferencesFor,reconcileBookLinks} from "./book-dependencies.mjs";
 import {getSourceSession} from "./source.mjs";
 import {AssetImporter} from "./assets.mjs";
 import {organizeDocuments} from "./organization.mjs";
@@ -179,19 +180,19 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
   const folder=await getFolder(content.book);
   report.folderId=folder.id;
   let processed=0,imaged=0,completed=0;
-  const total=index.all.length;
+  const total=index.all.filter(e=>!e.external).length;
   const progress=(phase,count,message)=>onProgress(message,{phase,completed:count,total,percent:Math.min(99,Math.floor((processed+imaged+completed)/(Math.max(1,total)*3+1)*100))});
   // Persist target Actors and Spells before Activities that reference them.
   const order=["monster","object","vehicle","spell","item","raceFeature","classFeature",
     "subclassFeature","optionalfeature","feat","race","background","subclass","class","spellList","chapter"];
   for(const kind of order){
-    const entries=index.all.filter(entry=>entry.kind===kind);
+    const entries=index.all.filter(entry=>entry.kind===kind&&!entry.external);
     if(!entries.length)continue;
     progress("convert",completed,`${LABELS[kind]}: preparando ${entries.length} documentos...`);
     const pack=await getPack(index,kind,folder,content);
     const docs=[];
     for (const entry of entries){
-      try{ docs.push(await convertOne(entry,index,content,report)); }
+      try{ const doc=await convertOne(entry,index,content,report);const refs=externalReferencesFor(doc,index);if(refs.length){doc.flags.bcc.externalReferences=refs;for(const ref of refs)if(ref.status!=="available")report.unresolved.add(`${doc.name}: external ${ref.source} / ${ref.name} is ${ref.status}`);}docs.push(doc); }
       catch(e){report.errors.push(`${kind} / ${entry.record.name}: conversão — ${e.message}`);}
       processed++;if(processed%20===0){progress("convert",completed,`${LABELS[kind]}: convertendo ${processed}/${total}...`);await pause(0);}
     }
@@ -224,7 +225,9 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
   for(const issue of await saveSpellLists(verifiedLists))report.incomplete.add(`Spell-list registration ${issue.uuid}: ${issue.message}`);
   if(options.mode!=="create")report.information.add("Reload Foundry after rebuilding to refresh the native spell-list registry. Obsolete packs and documents are not automatically removed.");
   if(content.sourceContext)report.sourceContext={token:content.sourceContext.token,...getSourceSession(content).metadata};
-  report.countDocuments=index.all.length;
+  if(content.includeDependencies===false){const reconciliation=await reconcileBookLinks();for(const issue of reconciliation.pending)report.unresolved.add(issue);report.information.add(`${reconciliation.updated} documents rebound to available book dependencies`);}
+  else await reconcileBookLinks();
+  report.countDocuments=total;
   report.persistedTotal=Object.values(report.created).reduce((a,b)=>a+b,0)+Object.values(report.updated).reduce((a,b)=>a+b,0)+
     Object.values(report.existing).reduce((a,b)=>a+b,0);
   report.failedCount=report.validationFailures.length;

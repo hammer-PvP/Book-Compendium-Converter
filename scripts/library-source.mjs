@@ -236,9 +236,9 @@ export async function readLibraryBook(id, options = {}) {
   const records = Object.fromEntries(KINDS.map(kind => [kind, [...selected.values()].filter(x => x.kind === kind).map(x => x.record)]));
   for(const rows of Object.values(records))for(const r of rows)r._bccRules=(r.classSource?sourceRules.get(canon(r.classSource)):null)??ruleOf(r)??sourceRules.get(canon(r.source))??null;
   const chapters = volume?.bookData?.find(e => canon(e.id) === canon(sourceId))?.data ?? [];
-  return {book, sourceId, chapters, records, foundry, sourceContext:{token:session.token,...session.metadata}, spellLookup: lookup,proficiencyItems:Object.fromEntries(catalog("item").map(r=>[canon(r.name).replace(/[^a-z0-9]/g,""),{name:r.name,type:r.type,weaponCategory:r.weaponCategory,property:r.property??[],source:r.source}])),
+  return {book, sourceId,includeDependencies:options.includeDependencies!==false, chapters, records, foundry, sourceContext:{token:session.token,...session.metadata}, spellLookup: lookup,proficiencyItems:Object.fromEntries(catalog("item").map(r=>[canon(r.name).replace(/[^a-z0-9]/g,""),{name:r.name,type:r.type,weaponCategory:r.weaponCategory,property:r.property??[],source:r.source}])),
     preparationIssues: [...new Map(issues.filter(i=>canon(i.source)===canon(sourceId)||[...selected.values()].some(e=>e.kind===i.category&&canon(e.record.name)===canon(i.name)&&canon(e.record.source)===canon(i.source))).map(i => [JSON.stringify(i), i])).values()],
     dependencyReasons:[...selected.values()].filter(e=>e.record._bccDependency).map(e=>({kind:e.kind,name:e.record.name,source:e.record.source,reasons:e.record._bccDependencyReasons})),
     dependencies: Object.fromEntries(KINDS.map(k => [k, records[k].filter(r => r._bccDependency).length])),
-    counts: Object.fromEntries(KINDS.map(k => [k, records[k].length]))};
+    counts: Object.fromEntries(KINDS.map(k => [k, records[k].filter(r=>options.includeDependencies!==false||!r._bccDependency).length]))};
 }

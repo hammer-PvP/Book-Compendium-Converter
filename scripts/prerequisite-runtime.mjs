@@ -1,4 +1,6 @@
 import {evaluatePrerequisites,prerequisiteContext,prerequisiteSelectors,spellMatches} from "./prerequisites.mjs";
+import {installBatchAdapter,installCommitAdapter,prerequisiteItems,retainedAcquisition} from "./transactions.mjs";
+import {registerSpellGrantRuntime,reconcileSpellGrants} from "./spell-grants-runtime.mjs";
 import {registerContainerRuntime} from "./containers-runtime.mjs";
 const KEY=Symbol.for("bcc.prerequisites.runtime.v1"),BLOCK="bcc-prerequisite-unsatisfied";
 const rows=items=>items?.contents??Array.from(items??[]);
@@ -56,7 +58,7 @@ export async function decoratePrerequisiteContext(context,actor,form){
 export function installConsumerAdapter(service){
   if(service[KEY])return;service[KEY]=true;
   const build=service.buildContext,apply=service.apply;
-  service.buildContext=async function(source,actor,...args){return decoratePrerequisiteContext(await build.call(this,source,actor,...args),actor,pendingForms.get(actor));};
+  service.buildContext=async function(source,actor,...args){await reconcileSpellGrants(actor);return decoratePrerequisiteContext(await build.call(this,source,actor,...args),actor,pendingForms.get(actor));};
   service.apply=async function(source,actor,registry,form,...args){pendingForms.set(actor,form);try{const context=await this.buildContext(source,actor,registry);await checkSubmittedPrerequisites(actor,context,form);return await apply.call(this,source,actor,registry,form,...args);}finally{pendingForms.delete(actor);}};
 }
 export async function decorateApplication(app){
@@ -83,20 +85,27 @@ export async function decorateApplication(app){
   await update();
 }
 export function registerPrerequisiteRuntime(){
-  registerContainerRuntime();
+  registerContainerRuntime();registerSpellGrantRuntime();
+  installBatchAdapter(globalThis.CONFIG?.Actor?.documentClass??globalThis.Actor?.implementation);
   if(globalThis[KEY])return;globalThis[KEY]=true;
   for(const event of ["createItem","updateItem","deleteItem"])Hooks.on(event,document=>{if(document.pack)documents.delete(document.uuid);});
   Hooks.on("preCreateItem",(document,data,options)=>{
     const actor=document.parent??document.actor,expression=data.flags?.bcc?.prerequisiteExpression;
     if(!actor||actor.type!=="character"||actor.pack||!expression||options?.bccSkipPrerequisites)return;
-    const result=evaluatePrerequisites(expression,actor);if(result.qualified)return;
+    const projected=prerequisiteItems(actor,options);
+    if(projected&&(options?.characterBuilderLevelUpRollback||options?.characterBuilderRollback)||retainedAcquisition(actor,data))return;
+    const result=evaluatePrerequisites(expression,actor,projected?{items:projected}:{});if(result.qualified)return;
     ui.notifications.warn(`${data.name}: ${result.reason}`);return false;
   });
   Hooks.on("renderApplicationV2",app=>{decorateApplication(app).catch(e=>console.error("BCC | Prerequisite UI",e));});
   const connect=async()=>{
     if(!game.modules?.get("dnd5e-character-builder")?.active)return;
-    try{const path=foundry.utils.getRoute?.("modules/dnd5e-character-builder/scripts/services/level-up-rules-service.mjs")??"modules/dnd5e-character-builder/scripts/services/level-up-rules-service.mjs";const {LevelUpRulesService}=await import(new URL(path,globalThis.location.href).href);if(typeof LevelUpRulesService?.buildContext==="function"&&typeof LevelUpRulesService?.apply==="function")installConsumerAdapter(LevelUpRulesService);}
-    catch(error){console.error("BCC | Consumer prerequisite adapter unavailable",error);ui.notifications.warn("BCC: não foi possível conectar o avaliador de pré-requisitos ao Character Builder. Consulte o console.");}
+    try{const path=foundry.utils.getRoute?.("modules/dnd5e-character-builder/scripts/services/level-up-rules-service.mjs")??"modules/dnd5e-character-builder/scripts/services/level-up-rules-service.mjs";const {LevelUpRulesService}=await import(new URL(path,globalThis.location.href).href);if(typeof LevelUpRulesService?.buildContext==="function"&&typeof LevelUpRulesService?.apply==="function")installConsumerAdapter(LevelUpRulesService);
+      const commitPath=path.replace("level-up-rules-service.mjs","level-up-commit-service.mjs"),{LevelUpCommitService}=await import(new URL(commitPath,globalThis.location.href).href);
+      if(typeof LevelUpCommitService?.commit==="function")installCommitAdapter(LevelUpCommitService,reconcileSpellGrants);
+      const {ActorCommitService}=await import(new URL(path.replace("level-up-rules-service.mjs","actor-commit-service.mjs"),globalThis.location.href).href);
+      if(typeof ActorCommitService?.commit==="function")installCommitAdapter(ActorCommitService,reconcileSpellGrants);
+    }catch(error){console.error("BCC | Consumer prerequisite adapter unavailable",error);ui.notifications.warn("BCC: não foi possível conectar o avaliador de pré-requisitos ao Character Builder. Consulte o console.");}
   };
   if(game.ready)void connect();else Hooks.once("ready",connect);
 }

@@ -24,6 +24,8 @@ export function compilePrerequisites(record){
     if(key==="spell")return {any:list(value).map(v=>spellCondition(v,record))};
     if(["feat","feature","optionalfeature","item"].includes(key))return {any:list(value).map(v=>typeof v==="string"?{kind:"item",type:key==="item"?null:"feat",identifier:slug(v.split("|")[0].replace(/#.*$/,"")),label:v.split("|")[0]}:{kind:"unsupported",label:`Unsupported ${key} prerequisite`})};
     if(key==="ability")return {any:list(value).map(v=>({all:Object.entries(v).map(([ability,minimum])=>({kind:"ability",ability,minimum:Number(minimum),label:`${ability.toUpperCase()} ${minimum}`}))}))};
+    if(key==="proficiency")return {any:list(value).map(group=>({all:Object.entries(group).map(([type,value])=>(["light","medium","heavy","shield"].includes(String(value).toLowerCase())&&type==="armor"||["simple","martial"].includes(String(value).toLowerCase())&&type==="weapon"?{kind:"proficiency",type,value,label:`${value} ${type} proficiency`}:{kind:"unsupported",label:`Unsupported ${type} proficiency: ${value}`}))}))};
+    if(key==="otherSummary"){const match=/^When Gaining the Level (\d+) (.+?) ["“](.+?)["”] Feature$/i.exec(value?.entry??"");return match?{kind:"acquisition",minimum:Number(match[1]),className:match[2],feature:slug(match[3]),label:value.entry}:{kind:"unsupported",label:value?.entry??"Special acquisition prerequisite requires review"};}
     if(key==="race")return {any:list(value).map(v=>typeof v==="object"&&Object.keys(v).some(k=>!["name","source"].includes(k))?{kind:"unsupported",label:"Species prerequisite needs a lineage-aware review"}:{kind:"item",type:"race",identifier:slug(typeof v==="string"?v:v.name),label:typeof v==="string"?v:v.name})};
     if(["spellcasting","spellcasting2020","spellcastingFeature"].includes(key)&&value===true)return {kind:"spellcasting",mode:key,label:key==="spellcasting"?"Ability to cast a spell":key==="spellcasting2020"?"Spellcasting or Pact Magic Feature":"Spellcasting Feature"};
     return {kind:"unsupported",label:`Prerequisite requires review: ${key}`};
@@ -60,6 +62,12 @@ function evaluateNode(node,ctx){
     if(rows.some(r=>r.qualified))return status(true);return rows.find(r=>r.unsupported)??status(false,rows.map(r=>r.reason).filter(Boolean).join(" or "));
   }
   if(node.kind==="level")return status((node.className?ctx.classes.get(slug(node.className))??0:ctx.characterLevel)>=node.minimum,`Requires ${node.label}`);
+  if(node.kind==="proficiency"){
+    const keys={armor:{light:"lgt",medium:"med",heavy:"hvy",shield:"shl"},weapon:{simple:"sim",martial:"mar"}},trait={armor:"armorProf",weapon:"weaponProf",tool:"toolProf"}[node.type],key=keys[node.type]?.[String(node.value).toLowerCase()];
+    if(!trait||!key)return {qualified:false,unsupported:true,reason:`Unsupported ${node.label}`};
+    const values=list(ctx.actor?.system?.traits?.[trait]?.value);return status(values.includes(key)||values.includes("all"),`Requires ${node.label}`);
+  }
+  if(node.kind==="acquisition")return status((ctx.classes.get(slug(node.className))??0)>=node.minimum&&ctx.items.some(i=>{const d=raw(i);return d.type==="feat"&&slug(d.system?.identifier??d.name)===node.feature;}),`Requires ${node.label}`);
   if(node.kind==="ability")return status(Number(ctx.actor?.system?.abilities?.[node.ability]?.value??0)>=node.minimum,`Requires ${node.label}`);
   if(node.kind==="item")return status(ctx.items.some(i=>{const d=raw(i);return (!node.type||d.type===node.type)&&(slug(d.system?.identifier??d.name)===node.identifier||slug(d.flags?.bcc?.originalName??d.name)===node.identifier||node.type==="race"&&d.flags?.bcc?.speciesIdentifiers?.includes(node.identifier));}),`Requires ${node.label}`);
   if(node.kind==="spellcasting")return status(ctx.items.some(i=>{const d=raw(i),progression=d.system?.spellcasting?.progression;if(d.type==="class"&&progression&&progression!=="none")return node.mode!=="spellcastingFeature"||progression!=="pact";return node.mode==="spellcasting"&&(d.type==="spell"||Object.values(d.system?.activities??{}).some(a=>a.type==="cast"));}),`Requires ${node.label}`);

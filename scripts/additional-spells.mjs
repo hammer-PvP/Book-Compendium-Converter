@@ -52,12 +52,13 @@ export function addSpellRecipes(record,index,adv,report,{add,lookup,classPool,ch
         const spell = {ability,method:context.mode === "innate" ? "innate" : "spell",prepared:2,uses:{max:context.count ? String(context.count) : "",per:context.period ?? "",requireSlot:false}};
         const policy=spellChoicePolicy(record,null,context,overlay);
         if(policy.representation==="deferred"){decisions.push({...policy,mode:context.mode,level:context.level,count:1,pool:[ref.uuid],spell});report.information.add(`${record.name}: ${policy.reason}`);return;}
-        add(adv,{type:"ItemGrant",name:`${block.name ?? "Additional Spell"}: ${ref.record.name}`,level:levelFor(context.level),configuration:{items:[{uuid:ref.uuid,optional:false,sort:0}],optional:false,sorting:"m",spell},value:{}});return;
+        add(adv,{type:"ItemGrant",name:`${block.name ?? "Additional Spell"}: ${ref.record.name}`,level:levelFor(context.level),configuration:{items:[{uuid:ref.uuid,optional:!!context.slotLevel,sort:0}],optional:!!context.slotLevel,sorting:"m",spell},value:{},...(context.slotLevel?{flags:{bcc:{spellGrantCondition:{kind:"slotLevel",minimum:context.slotLevel}}},hint:`Always prepared when level ${context.slotLevel} spell slots are available`}:{})});return;
       }
       if (!value || typeof value !== "object") return;
       if(context.mode==="expanded")return;
       if(value.all){for(const ref of filterSpellPool(value.all,index,record,classPool,report))visit(`${ref.record.name}|${ref.record.source}`,context);return;}
       if (value.choose) {
+        if(context.slotLevel){report.incomplete.add(`${record.name}: slot-conditioned spell choice needs explicit selection support`);return;}
         const count=Number(value.count??value.choose?.count??1),policy=spellChoicePolicy(record,value.choose,{...context,count},overlay);
         if(policy.warning)report.incomplete.add(`${record.name}: ${policy.warning}`);
         let pool = [], level = null;
@@ -91,7 +92,7 @@ export function addSpellRecipes(record,index,adv,report,{add,lookup,classPool,ch
           if(key==="weekly")report.incomplete.add(`${record.name}: weekly spell uses require manual recovery; no native weekly recovery period`);
           for (const [count,spells] of Object.entries(child)) visit(spells,{...context,count:parseInt(count),period:key === "rest" ? "sr" : key === "weekly" ? "" : /long rest/i.test(JSON.stringify(record.entries??[]))?"lr":"day"});
         } else if (/^\d+$/.test(key)) visit(child,{...context,level:Number(key)});
-        else if (/^s\d+$/.test(key)) {report.incomplete.add(`${record.name}: spell-slot-level grant ${key} needs progression binding`);}
+        else if (/^s\d+$/.test(key)) {visit(child,{...context,slotLevel:Number(key.slice(1))});report.information.add(`${record.name}: conditional always-prepared grant requires level ${key.slice(1)} spell slots`);}
         else if (["_","will","ritual"].includes(key)) visit(child,context);
         else report.incomplete.add(`${record.name}: unsupported additional-spell key ${key}`);
       }

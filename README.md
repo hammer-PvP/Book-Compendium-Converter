@@ -1,4 +1,4 @@
-# Book Compendium Converter — 0.1.0 experimental
+# Book Compendium Converter — 0.1.1 experimental
 
 An online book importer and content-module exporter targeting **Foundry VTT 14.369 / D&D5e 6.0.6**.
 This build expands native world-compendium generation. **Foundry and Character
@@ -107,6 +107,99 @@ Validation freezes a read-only snapshot, including the checked media bytes.
 Changes made after validation require validating again to include them. Export
 does not synchronize existing character inventories. Export one or several
 books per package; this version limits selected media to 512 MiB.
+
+## 0.1.1 changes
+
+### Level-up transactions and prerequisites
+
+BCC validates new acquisitions against the complete confirmed draft before the
+live Actor is changed. Its creation guard uses the same projected Item set
+while Character Builder materializes the batch, instead of inspecting a
+transiently empty Actor. Captured rollback Items are checked against the
+original snapshot; restoration preserves original class identity. Acquired
+features being retained are not treated as newly selected features. Safety
+locks and snapshot verification remain enabled. BCC integrates the public
+creation/level-up commit services without modifying Character Builder files.
+
+Armor/shield and simple/martial weapon proficiency predicates are evaluated
+against native Actor traits. The recognized special-acquisition sentence form
+is compiled into a class-level plus feature predicate. Unrecognized operators
+remain explicit review requirements. These rules use source structure rather
+than specific feat, spell, class or book names.
+
+### Import a book with or without external dependencies
+
+The **Incluir dependências de outros livros** checkbox defaults to on. Turn it
+off and analyze again to import the selected publication without copying the
+external catalog into its packs. The analysis lists external source books and
+available, missing or ambiguous providers. A matching provider must have the
+BCC source identity and compatible rule metadata; bundle components are not
+catalog templates. Confirmed references are reused; unresolved mechanical
+references remain reported until the supplying book is imported. Ordinary
+unavailable narrative links are rendered as text.
+
+Importing a supplying book reconciles declared BCC compendium links. Existing
+Actor inventories are not synchronized. Existing dependency copies from older
+imports are not deleted by this checkbox; use a fresh test World to compare
+clean organization. A book may require more than PHB: some AU items reference
+XMM summon profiles. The dependency list reports what the source actually uses.
+
+### Export separate or combined modules
+
+The exporter suggests the module title, identifier and ZIP name from the
+selected source abbreviations, such as `bcc-xphb` or `bcc-au`. Multiple selections
+produce a stable combined suggestion. Fields remain editable; manually edited
+fields are preserved when the selection changes.
+
+The exporter has its own **Incluir dependências no pacote** checkbox. Leave it
+on for a self-contained package. To export separate providers and supplements,
+export the providers first, then turn it off for the supplement. BCC records the
+provider's module ID, pack address and document fingerprint in the World. It
+remaps supplement references and declares the required modules in the manifest.
+If provider documents changed, re-export the provider before the supplement.
+Install and enable all declared providers in the destination World.
+
+A combined export consolidates mechanically equivalent BCC catalog copies and
+remaps references. Divergent manual edits remain separate and are reported.
+Container instances and their sibling contents remain independent; deduplication
+does not merge physical inventory trees.
+
+### Conditional spells, resources and reports
+
+Source `prepared.sN` recipes generate native ItemGrant Advancements with an
+explicit slot-level condition. Optional entries prevent consumers unaware of
+that condition from granting spells early. BCC's included runtime reconciles
+eligible grants using native available slot levels, keeps spells **Always
+Prepared**, and records native grant ownership and `value.added`. Spent slots
+still count by their maximum; both ordinary slots and Pact Magic are considered.
+The same support ships in exported modules. These are not character-level-N
+Advancements. Unsupported conditional spell choices remain reported.
+
+Actor-dependent consumption references can remain intentionally deferred until
+an unambiguous resource exists on the receiving Actor. Missing, ambiguous or
+stale bindings block Activity use. Shared daily/rest spell groups on NPCs now
+use a single embedded native pool; `each` groups retain individual pools.
+Variant tokens inherit the declared base identity unless a specific token is
+provided. Image 404s remain failures even when a later fallback fills the field.
+The report separates persistence, unresolved references, partial mechanics,
+source definition gaps and recovered image failures.
+
+**Remaining source gaps:** the supplied XPHB supplement references an absent
+`martialArts` rider Activity; AU references an absent `focusedStrike` Effect.
+Inspection of the supplied official modules also found the corresponding
+unresolved references. BCC retains the available enchantment/Activity and
+reports the gap; it does not invent the missing definition or remove the alert.
+
+For this revision, rebuild affected BCC compendium documents and regenerate
+content-module ZIPs. Previously exported modules contain their own runtime;
+updating BCC alone does not replace it. Restart Foundry after updating modules.
+A character already safety-locked requires inspection/restoration from its
+preserved backup before further advancement tests.
+
+Validation includes source-free transaction, prerequisite, grant and export
+regressions in CI; real XPHB/AU/EFA/TCE conversion graphs; clean/separate/combined
+export scenarios; and native LevelDB reads. Browser/gameplay homologation in a
+running Foundry instance remains required.
 
 ## 0.1.0 changes
 
@@ -415,7 +508,7 @@ The development reference was Character Builder 0.9.921.
 Keep BCC enabled while granting items that need deferred resource references:
 its original resource-binding hook resolves imported UUID references to the
 Actor's embedded Item IDs. Native spell-list registration also runs through
-BCC. The generated world output is not yet a standalone distributable module.
+BCC. The exporter includes the required original runtime in generated content modules.
 
 Development checks exercise source contracts, document blueprints, dependency
 graphs and a mocked persistence transport. They do **not** execute Foundry's
@@ -434,8 +527,7 @@ or Character Builder certification.
   choices, legacy casting formulas and some multiclass or replacement flows
   need live QA. Native level/item prerequisites cannot encode every source
   condition; unsupported conditions remain in provenance and the report.
-- Compound attacks, follow-up saves, alternative damage, shared spell-use
-  pools, weekly recovery, unusual item recipes and vehicle station mechanics
+- Compound attacks, follow-up saves, alternative damage, weekly recovery, unusual item recipes and vehicle station mechanics
   may require manual work. Ambiguous damage is not automatically summed.
 - Native supplements take priority over inferred activities. A supplement can
   still leave source mechanics incomplete; such cases are reported.

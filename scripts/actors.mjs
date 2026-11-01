@@ -96,7 +96,7 @@ export async function buildActor(entry, index, content, report, helpers) {
     if(component.hp!=null||component.ac!=null)report.incomplete.add(`${r.name}: ${component.name??group} component HP/AC retained in source; native station mechanics require validation`);
   }
   const references = [];
-  for (const casting of r.spellcasting ?? []) {
+  for (const [castingIndex,casting] of (r.spellcasting ?? []).entries()) {
     await feature({name:casting.name ?? "Spellcasting",entries:[...(casting.headerEntries ?? []),...(casting.footerEntries ?? [])]},"","spellcasting",items.length);
     const ability = casting.ability ?? r.spellcastingAbility ?? "int";
     system.attributes.spellcasting ??= ability;
@@ -109,9 +109,14 @@ export async function buildActor(entry, index, content, report, helpers) {
     }
     for (const [key,method] of [["will","atwill"],["constant","atwill"],["ritual","ritual"]]) for (const uid of casting[key] ?? []) references.push({uid,ability,method});
     for (const [key,period] of [["daily","day"],["rest","sr"],["weekly",null]]) for (const [count,spells] of Object.entries(casting[key] ?? {})) {
-      for (const uid of spells) references.push({uid,ability,method:"innate",count:parseInt(count),period});
+      let shared;
+      if(!count.endsWith("e")&&spells.length>1){
+        shared=await localId(`${entry.key}:spell-pool:${castingIndex}:${key}:${count}`);
+        items.push({_id:shared,name:`${casting.name??"Spellcasting"} — ${count}/${key}`,type:"feat",system:{type:{value:"monster"},uses:{max:String(parseInt(count)),spent:0,recovery:period?[{period,type:"recoverAll"}]:[]}},flags:{bcc:{sharedSpellPool:true}}});
+      }
+      for (const uid of spells) references.push({uid,ability,method:"innate",count:parseInt(count),period,shared});
       if(key==="weekly")report.incomplete.add(`${r.name}: weekly spell uses require manual recovery; no native weekly recovery period`);
-      if (!count.endsWith("e") && spells.length>1) report.incomplete.add(`${r.name}: shared ${key} spell-use pool ${count} needs joint resource binding`);
+
     }
   }
   for (const spec of references) {
@@ -119,13 +124,14 @@ export async function buildActor(entry, index, content, report, helpers) {
     const ref = lookup(index,"spell",uid,r.source);
     if (!ref) {report.unresolved.add(`${r.name}: spell ${uid}`);continue;}
     const spell = await convert(ref,index,content,report);
-    spell._id = await localId(`${entry.key}:spell:${uid}:${spec.method}:${spec.count ?? ""}`);
+    spell._id = await localId(`${entry.key}:spell:${uid}:${spec.method}:${spec.count ?? ""}${spec.shared?`:${spec.shared}`:""}`);
     if (embedded.has(spell._id)) continue; embedded.set(spell._id,true);
     spell._stats = {compendiumSource:ref.uuid}; spell.flags.bcc.actorOrigin = ref.uuid;
     spell.system.method = spec.method; spell.system.ability = spec.ability;spell.system.prepared = 2;
     if (spec.count) {
-      spell.system.uses = {max:String(spec.count),spent:0,recovery:spec.period?[{period:spec.period,type:"recoverAll"}]:[]};
-      for (const a of Object.values(spell.system.activities ?? {})) a.consumption = {targets:[{type:"itemUses",value:"1"}],spellSlot:false};
+      if(!spec.shared)spell.system.uses = {max:String(spec.count),spent:0,recovery:spec.period?[{period:spec.period,type:"recoverAll"}]:[]};
+      else spell.system.uses={max:"",spent:0,recovery:[]};
+      for (const a of Object.values(spell.system.activities ?? {})) a.consumption = {targets:[{type:"itemUses",value:"1",...(spec.shared?{target:spec.shared}:{})}],spellSlot:false};
     }
     items.push(spell);
   }
@@ -149,5 +155,5 @@ export async function buildActor(entry, index, content, report, helpers) {
   }
   if (r.spellcastingHidden) report.incomplete.add(`${r.name}: hidden spellcasting metadata requires verification`);
   bindEmbeddedResources(items);
-  return {_id,name:r.name,type,system,items,flags:{bcc:{sourceId:content.sourceId,category:kind,identity:entry.key,converterVersion:"0.1.0",dependency:!!r._bccDependency}},prototypeToken:{name:r.name,actorLink:false}};
+  return {_id,name:r.name,type,system,items,flags:{bcc:{sourceId:content.sourceId,category:kind,identity:entry.key,converterVersion:"0.1.1",dependency:!!r._bccDependency}},prototypeToken:{name:r.name,actorLink:false}};
 }

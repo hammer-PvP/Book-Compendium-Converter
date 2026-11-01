@@ -23,12 +23,25 @@ export function exportBooks(){
   }
   return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name));
 }
+/** Use source catalog abbreviations, keeping different book selections distinct. */
+export function suggestExportIdentity(books){
+  const ordered=[...books].sort((a,b)=>a.source.localeCompare(b.source)),codes=ordered.map(b=>b.source);
+  const slug=s=>String(s).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+  let id=codes.length?`bcc-${codes.map(slug).join("-")}`:"bcc-library";
+  if(id.length>64){let hash=2166136261;for(const ch of codes.join("|"))hash=Math.imul(hash^ch.charCodeAt(0),16777619)>>>0;id=`${id.slice(0,54).replace(/-$/,"" )}-${hash.toString(16).padStart(8,"0")}`;}
+  const title=ordered.length?ordered.map(b=>`${b.name} (${b.source})`).join(" · ").slice(0,150):"BCC Library";
+  return {id,title,version:"1.0.0"};
+}
 export function exportIdentity({id,title,version}){
   id=String(id??"").trim();title=String(title??"").trim();version=String(version??"").trim();
   if(!/^[a-z][a-z0-9-]{2,63}$/.test(id)||["world","dnd5e","book-compendium-converter"].includes(id))throw Error("Use um identificador de 3–64 caracteres: letras minúsculas, números e hífens.");
   if(!title||title.length>150)throw Error("Informe o nome do módulo (até 150 caracteres).");
   if(!/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(version))throw Error("Use uma versão como 1.0.0.");
   return {id,title,version};
+}
+export async function packFingerprint(documents,folders=[]){
+  const stable=v=>Array.isArray(v)?v.map(stable):v&&typeof v==="object"?Object.fromEntries(Object.keys(v).filter(k=>!["_stats","contentHash","importedAt"].includes(k)).sort().map(k=>[k,stable(v[k])])):v;
+  return sha256(JSON.stringify(stable({documents:[...documents].sort((a,b)=>a._id.localeCompare(b._id)),folders:[...folders].sort((a,b)=>a._id.localeCompare(b._id))})));
 }
 function strings(value,fn,path=[]){
   if(typeof value==="string")fn(value,path);
@@ -79,12 +92,29 @@ async function readPack(pack){
     return {documents:documents.map(d=>cleanStats(plain(d))),errors};
   }finally{if(listener!=null)hooks.off("error",listener);}
 }
+/** Collapse only mechanically equivalent BCC documents; preserve divergent edits. */
+export function deduplicatePacks(packs,report){
+  const byUuid=new Map(),groups=new Map(),redirects=new Map();
+  for(const row of packs.values())for(const doc of row.documents){const uuid=`Compendium.${row.old}.${row.type}.${doc._id}`;byUuid.set(uuid,doc.flags?.bcc?.identity??uuid);const key=doc.flags?.bcc?.identity;if(!key||row.type==="JournalEntry"||doc.type==="container"||doc.flags?.bcc?.bundleComponent||doc.system?.container)continue;if(!groups.has(key))groups.set(key,[]);groups.get(key).push({row,doc,uuid});}
+  const signature=doc=>{
+    function stable(v){if(Array.isArray(v))return v.map(stable);if(v&&typeof v==="object")return Object.fromEntries(Object.keys(v).filter(k=>!["_stats","sourceId","dependency","dependencyReasons","importedAt","contentHash","assets"].includes(k)).sort().map(k=>[k,stable(v[k])]));if(typeof v==="string")return v.replace(UUID,u=>byUuid.get(u)??u);return v;}
+    const data=structuredClone(doc);for(const key of ["_id","folder","sort","ownership"])delete data[key];return JSON.stringify(stable(data));
+  };
+  for(const group of groups.values()){
+    group.sort((a,b)=>Number(!!a.doc.flags.bcc.dependency)-Number(!!b.doc.flags.bcc.dependency));const winner=group[0],expected=signature(winner.doc);
+    for(const candidate of group.slice(1)){if(signature(candidate.doc)!==expected){report.warnings.push(`${candidate.doc.name}: versões divergentes preservadas na exportação`);continue;}redirects.set(candidate.uuid,winner.uuid);candidate.row.documents=candidate.row.documents.filter(d=>d!==candidate.doc);}
+  }
+  if(redirects.size)report.warnings.push(`${redirects.size} cópias equivalentes consolidadas; vínculos remapeados`);
+  return redirects;
+}
 /** Read-only snapshot of persisted compendiums. No source JSON is re-imported. */
-export async function validateExport(sources,identity,onProgress=()=>{}){
+export async function validateExport(sources,identity,onProgress=()=>{},options={includeDependencies:true}){
   if(!game.user?.isGM)throw Error("A exportação requer usuário GM.");
   identity=exportIdentity(identity);
   const books=exportBooks().filter(b=>sources.includes(b.source));if(!books.length)throw Error("Selecione ao menos um livro importado.");
   const report={errors:[],warnings:[],books:books.map(b=>b.source),dependencies:[],packs:[],assets:0,documents:0,generatedAt:new Date().toISOString()};
+  let exported={};try{exported=game.settings?.get("book-compendium-converter","exportTargets")??{};}catch{}
+  const worldExports=new Map();
   const pending=books.flatMap(b=>b.packs),packs=new Map(),externalModules=new Map(),references=new Set();
   for(let i=0;i<pending.length;i++){
     const pack=pending[i];if(packs.has(pack.collection))continue;
@@ -95,14 +125,16 @@ export async function validateExport(sources,identity,onProgress=()=>{}){
     catch(error){report.errors.push(`${pack.collection}: ${error.message}`);continue;}
     if(pack.invalidDocumentIds?.size)report.errors.push(`${pack.collection}: ${pack.invalidDocumentIds.size} documentos inválidos no compêndio.`);
     const targetName=pack.collection.slice("world.".length),row={old:pack.collection,name:targetName,label:pack.title??pack.metadata?.label??targetName,type:pack.documentName,documents,folders};
-    packs.set(pack.collection,row);
+    row.fingerprint=await packFingerprint(documents,folders);packs.set(pack.collection,row);
     for(const doc of documents)strings(doc,(text,path)=>{
       for(const match of text.matchAll(UUID)){
         references.add(match[0]);const collection=`${match[1]}.${match[2]}`;
         if(packs.has(collection)||pending.some(p=>p.collection===collection))continue;
         const dependency=game.packs.get(collection);
         if(match[1]==="world"){
-          if(dependency&&SUPPORTED.has(dependency.documentName)){pending.push(dependency);report.dependencies.push(collection);}
+          if(options.includeDependencies===false&&exported[collection]&&exported[collection].moduleId!==identity.id){const target={...exported[collection]};worldExports.set(collection,target);externalModules.set(target.moduleId,{version:target.version});}
+          else if(options.includeDependencies===false)report.errors.push(`${doc.name}: exporte primeiro ${collection} em um módulo separado ou inclua suas dependências`);
+          else if(dependency&&SUPPORTED.has(dependency.documentName)){pending.push(dependency);report.dependencies.push(collection);}
           else report.errors.push(`${doc.name}: compêndio dependente indisponível ${collection}`);
         }else if(dependency?.metadata?.packageType==="system"||match[1]===game.system.id){/* Provided by the game system. */}
         else if(dependency&&game.modules?.get(match[1]))externalModules.set(match[1],game.modules.get(match[1]));
@@ -116,9 +148,16 @@ export async function validateExport(sources,identity,onProgress=()=>{}){
     });
     await pause();
   }
-  for(const uuid of references){
+  const duplicateRefs=deduplicatePacks(packs,report);
+  for(const originalUuid of references){
+    const uuid=duplicateRefs.get(originalUuid)??originalUuid;
     const parts=uuid.split("."),collection=`${parts[1]}.${parts[2]}`,row=packs.get(collection);
     if(row){const doc=row.documents.find(d=>d._id===parts[4]);if(!doc||!embeddedExists(doc,parts.slice(5)))report.errors.push(`Documento referenciado não encontrado: ${uuid}`);}
+    else if(worldExports.has(collection)){
+      const target=worldExports.get(collection),pack=game.packs.get(collection);
+      if(!target.verified){const loaded=await readPack(pack),folders=values(pack.folders).map(d=>cleanStats(plain(d)));if(await packFingerprint(loaded.documents,folders)!==target.fingerprint)report.errors.push(`Reexporte ${collection}: os documentos mudaram desde a exportação para ${target.moduleId}`);target.verified=true;}
+      try{if(!(await fromUuid(uuid)))report.errors.push(`Referência ausente: ${uuid}`);}catch(error){report.errors.push(error.message);}
+    }
     else {try{if(!(await fromUuid(uuid)))report.errors.push(`Referência externa não encontrada: ${uuid}`);}catch(error){report.errors.push(`${uuid}: ${error.message}`);}}
   }
   // Containers use sibling IDs rather than UUIDs; validate these links too.
@@ -163,7 +202,8 @@ export async function validateExport(sources,identity,onProgress=()=>{}){
   const spellLists=[];
   for(const row of packs.values()){
     row.documents=row.documents.map(d=>transform(d,text=>{
-      let out=text.replace(UUID,(uuid,owner,name)=>owner==="world"&&packs.has(`${owner}.${name}`)?uuid.replace(`Compendium.${owner}.${name}.`,`Compendium.${identity.id}.${packs.get(`${owner}.${name}`).name}.`):uuid);
+      text=text.replace(UUID,uuid=>duplicateRefs.get(uuid)??uuid);
+      let out=text.replace(UUID,(uuid,owner,name)=>worldExports.get(`${owner}.${name}`)?.redirects?.[uuid]??(worldExports.has(`${owner}.${name}`)?uuid.replace(`Compendium.${owner}.${name}.`,`Compendium.${worldExports.get(`${owner}.${name}`).moduleId}.${worldExports.get(`${owner}.${name}`).packName}.`):owner==="world"&&packs.has(`${owner}.${name}`)?uuid.replace(`Compendium.${owner}.${name}.`,`Compendium.${identity.id}.${packs.get(`${owner}.${name}`).name}.`):uuid));
       if(aliases.has(out))return aliases.get(out);
       if(/[<>]/.test(out))out=out.replace(/\b(src|href|poster)\s*=\s*(["'])([^"']+)\2/gi,(m,key,quote,path)=>aliases.has(path)?`${key}=${quote}${aliases.get(path)}${quote}`:m);
       return out;
@@ -175,7 +215,7 @@ export async function validateExport(sources,identity,onProgress=()=>{}){
   report.warnings.push("A validação confere estrutura, referências e arquivos. Mecânicas e Activities precisam de testes no Foundry.");
   report.errors=[...new Set(report.errors)];report.assets=new Set([...assets.values()].map(a=>a.path).filter(Boolean)).size;report.assetBytes=totalBytes;
   const manifest={id:identity.id,title:identity.title,version:identity.version,description:"Native D&D5e compendiums exported from Book Compendium Converter.",authors:[{name:game.user.name??"Game Master"}],compatibility:{minimum:"14.369",verified:"14.369"},relationships:{systems:[{id:"dnd5e",type:"system",compatibility:{minimum:"6.0.6"}}],...(externalModules.size?{requires:[...externalModules].map(([id,module])=>({id,type:"module",compatibility:{minimum:module.version}}))}:{})},packs:[...packs.values()].map(p=>({name:p.name,label:p.label,path:`packs/${p.name}`,type:p.type,system:"dnd5e",flags:{bcc:{exported:true}}})),packFolders:books.map(b=>({name:b.name,color:b.color,sorting:"a",packs:b.packs.map(p=>packs.get(p.collection)?.name).filter(Boolean)})),esmodules:["scripts/runtime.mjs"],flags:{dnd5e:{spellLists},bcc:{exportVersion:1,books:report.books}}};
-  return {manifest,packs,assets,report,hierarchy:embeddedHierarchy()};
+  return {manifest,packs,assets,report,hierarchy:embeddedHierarchy(),exportTargets:Object.fromEntries([...packs.values()].map(row=>[row.old,{moduleId:identity.id,packName:row.name,version:identity.version,fingerprint:row.fingerprint,redirects:Object.fromEntries([...duplicateRefs].filter(([uuid])=>uuid.startsWith(`Compendium.${row.old}.`)).map(([a,b])=>[a,b.replace(/^Compendium\.world\.([^.]+)\./,`Compendium.${identity.id}.$1.`)]))}]))};
 }
 export async function buildExport(snapshot,onProgress=()=>{}){
   if(!game.user?.isGM)throw Error("A exportação requer usuário GM.");
@@ -193,9 +233,10 @@ export async function buildExport(snapshot,onProgress=()=>{}){
   for(const asset of snapshot.assets.values()){if(seen.has(asset.path))continue;seen.add(asset.path);onProgress(`Incluindo mídia ${++count}/${snapshot.report.assets}...`);await zip.add(`${root}/${asset.path}`,asset.blob);await pause();}
   const runtimeResponse=await fetch(foundry.utils.getRoute?.("modules/book-compendium-converter/scripts/export-runtime.mjs")??"modules/book-compendium-converter/scripts/export-runtime.mjs",{credentials:"same-origin"});if(!runtimeResponse.ok)throw Error("Não foi possível carregar o suporte do módulo exportado.");
   await zip.add(`${root}/scripts/runtime.mjs`,await runtimeResponse.text(),{compress:true});
-  for(const file of ["prerequisite-runtime.mjs","prerequisites.mjs","spell-filter.mjs","containers-runtime.mjs"]){const response=await fetch(foundry.utils.getRoute?.(`modules/book-compendium-converter/scripts/${file}`)??`modules/book-compendium-converter/scripts/${file}`,{credentials:"same-origin"});if(!response.ok)throw Error(`Não foi possível carregar ${file}`);await zip.add(`${root}/scripts/${file}`,await response.text(),{compress:true});}
+  for(const file of ["prerequisite-runtime.mjs","prerequisites.mjs","spell-filter.mjs","containers-runtime.mjs","transactions.mjs","spell-grants-runtime.mjs","resource-bindings.mjs"]){const response=await fetch(foundry.utils.getRoute?.(`modules/book-compendium-converter/scripts/${file}`)??`modules/book-compendium-converter/scripts/${file}`,{credentials:"same-origin"});if(!response.ok)throw Error(`Não foi possível carregar ${file}`);await zip.add(`${root}/scripts/${file}`,await response.text(),{compress:true});}
   await zip.add(`${root}/export-report.json`,JSON.stringify(snapshot.report,null,2),{compress:true});
   await zip.add(`${root}/README.md`,`# ${snapshot.manifest.title}\n\nExtract this folder to FoundryVTT/Data/modules/${root}/, restart Foundry and enable the module in a D&D5e world. Native compendiums and spell lists are provided without BCC, Plutonium or local 5etools data. Any external module dependencies are listed in module.json. Existing Actor inventories are not synchronized.\n\nThis package contains a snapshot of the validated compendium documents; it does not certify mechanical completeness.\n`);
+  if(game.settings?.set){let targets={};try{targets=game.settings.get("book-compendium-converter","exportTargets")??{};}catch{}await game.settings.set("book-compendium-converter","exportTargets",{...targets,...snapshot.exportTargets});}
   return zip.blob();
 }
 export function downloadExport(blob,name){const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);}

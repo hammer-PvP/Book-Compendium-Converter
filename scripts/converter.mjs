@@ -1,3 +1,4 @@
+import {applyDependencyPolicy} from "./book-dependencies.mjs";
 import {compilePrerequisites,spellMetadata,unsupportedPrerequisites} from "./prerequisites.mjs";
 import {stableId as idFor} from "./hash.mjs";
 import {materializeBundles,applyBundleData} from "./bundles.mjs";
@@ -79,7 +80,7 @@ export async function buildIndex(content, destination = WORLD_DESTINATION) {
     chapter: content.chapters.map((entry, i) => ({name: entry.name || `Section ${i + 1}`, source:content.sourceId,
       page: entry.page, entries: entry.entries, chapter: entry, sequence:i}))};
   const lists=[];
-  for(const [kind,rows] of [["class",records.class],["subclass",records.subclass]])for(const r of rows)if(r.casterProgression||r.additionalSpells?.some(b=>b.expanded))lists.push({pageId:await idFor(`spell-list:${entityKey(kind,r)}`),name:r.name,source:r.source,_bccRules:r._bccRules,identifier:r.foundryIdentifier??findSupplement(kind,r,content.foundry)?.identifier??slug(r.name),className:r.className??r.name,classSource:r.classSource??r.source,ownerName:r.name,listType:kind,additionalSpells:clone(r.additionalSpells??[])});
+  for(const [kind,rows] of [["class",records.class],["subclass",records.subclass]])for(const r of rows)if((content.includeDependencies!==false||!r._bccDependency)&&(r.casterProgression||r.additionalSpells?.some(b=>b.expanded)))lists.push({pageId:await idFor(`spell-list:${entityKey(kind,r)}`),name:r.name,source:r.source,_bccRules:r._bccRules,identifier:r.foundryIdentifier??findSupplement(kind,r,content.foundry)?.identifier??slug(r.name),className:r.className??r.name,classSource:r.classSource??r.source,ownerName:r.name,listType:kind,additionalSpells:clone(r.additionalSpells??[])});
   if(lists.length)records.spellList.push({name:"Spell Lists",source:content.sourceId,lists});
   for(const [kind,rows] of Object.entries(records))if(kind!=="spellList")for(const record of rows){
     if((record.additionalSpells?.length??0)>1){
@@ -107,7 +108,7 @@ export async function buildIndex(content, destination = WORLD_DESTINATION) {
     }
   }
   const index={records, byKey, byShort, packKeys, destination, proficiencyItems:content.proficiencyItems??{}, spellLookup:content.spellLookup, all:[...byKey.values()].filter(e=>!e.virtual)};
-  await materializeBundles(index,lookupUid);return index;
+  await materializeBundles(index,lookupUid);await applyDependencyPolicy(index,content,PACK_DEFS);return index;
 }
 function locate(index, kind, name, source) {
   const all = index.byShort.get(`${kind}|${canon(source)}|${canon(name)}`) ?? [];
@@ -136,7 +137,7 @@ function lookupUid(index, kind, uid, fallbackSource) {
 }
 function linkedText(inner,index,category,source) {
   const parts=inner.split("|");const name=parts[0]?.trim()??"";const ref=lookupUid(index,category,inner,source);
-  return ref && !ref.virtual ? `@UUID[${ref.uuid}]{${safe(name)}}` : safe(name);
+  return ref && !ref.virtual && (!ref.external||index.externalReferences?.find(e=>e.uuid===ref.uuid)?.status==="available") ? `@UUID[${ref.uuid}]{${safe(name)}}` : safe(name);
 }
 function convertTags(input, index, source, report) {
   const token=/\{@([\w-]+)\s+([^{}]+)\}/g;
@@ -415,7 +416,7 @@ function normalizeEffects(arr,kind,record,report){
     out.push({_id:`eff${String(i+1).padStart(13,"0")}`,name:e.name??`${record.name} Effect ${i+1}`,
       ...(e.type?{type:e.type}:{}),description:e.description??safe(plainText(e.descriptionEntries??[])),disabled:e.disabled??false,
       transfer:e.transfer??false,system:{...(e.system??{}),changes},duration:normalizeDuration(e.duration),
-      statuses:e.statuses??[],...(e.showIcon!=null?{showIcon:e.showIcon}:{}),img:e.img??"icons/svg/aura.svg",flags:{...(e.flags??{}),bcc:{foundryId:e.foundryId??""}}});
+      statuses:e.statuses??[],...(e.showIcon!=null?{showIcon:e.showIcon}:{}),img:e.img??"icons/svg/aura.svg",flags:{...(e.flags??{}),bcc:{foundryId:e.foundryId??e._id??""}}});
   }
   for(const [i,raw] of (arr??[]).entries()){
     const effect=out[i];if(!effect)continue;
@@ -453,14 +454,15 @@ function resolveOverlayUUID(value, index, expectedKind, report, context){
 function normalizeActivities(arr,effects,index,record,report){
   const out={};
   const source=(arr??[]).filter(a=>a?.type);
-  const idByFoundryId=new Map(source.filter(a=>a.foundryId).map((a,i)=>[a.foundryId,`act${String(source.indexOf(a)+1).padStart(13,"0")}`]));
+  const idByFoundryId=new Map(source.flatMap((a,i)=>[a.foundryId,a._id].filter(Boolean).map(id=>[id,`act${String(i+1).padStart(13,"0")}`])));
+  const refId=e=>typeof e==="string"?e:e?.foundryId??e?._id??e?.id;
   // A missing status-only definition is recoverable when the source names
   // exactly one condition and exactly one missing effect. Other gaps remain explicit.
-  const requested=[...new Set(source.flatMap(a=>(a.effects??[]).map(e=>e.foundryId)).filter(Boolean))];
+  const requested=[...new Set(source.flatMap(a=>(a.effects??[]).map(refId)).filter(Boolean))];
   const missing=requested.filter(id=>!effects.some(e=>e.flags?.bcc?.foundryId===id));
   const statuses=[...new Set([...JSON.stringify(record.entries??[]).matchAll(/\{@condition\s+([^}|]+)/gi)].map(m=>canon(m[1])))];
   const known=new Set((globalThis.CONFIG?.statusEffects??[]).map(e=>e.id));
-  if(missing.length===1&&statuses.length===1&&known.has(statuses[0])&&source.some(a=>a.type==="save"&&(a.effects??[]).some(e=>e.foundryId===missing[0]))){
+  if(missing.length===1&&statuses.length===1&&known.has(statuses[0])&&source.some(a=>a.type==="save"&&(a.effects??[]).some(e=>refId(e)===missing[0]))){
     const id=`eff${String(effects.length+1).padStart(13,"0")}`;
     effects.push({_id:id,name:record.name,type:"base",disabled:false,transfer:false,statuses,system:{changes:[]},flags:{bcc:{foundryId:missing[0],sourceCondition:true}}});
     report.information.add(`${record.name}: missing supplemental effect recovered from the single explicit source condition ${statuses[0]}`);
@@ -468,7 +470,7 @@ function normalizeActivities(arr,effects,index,record,report){
   const effectIdByFoundryId=new Map(effects.filter(e=>e.flags?.bcc?.foundryId).map(e=>[e.flags.bcc.foundryId,e._id]));
   for(const [i,a] of source.entries()){
     const _id=`act${String(i+1).padStart(13,"0")}`;
-    const normalized=structuredClone(a);delete normalized.foundryId;
+    const normalized=structuredClone(a);delete normalized.foundryId;delete normalized._id;
     const context=`${record.name} / ${a.name??a.type}`;
     for(const [ti,target] of (normalized.consumption?.targets??[]).entries())if(target.target&&typeof target.target==="object"){
       const reference=clone(target.target);
@@ -477,10 +479,14 @@ function normalizeActivities(arr,effects,index,record,report){
       const ref=reference.uid&&kind?lookupUid(index,kind,reference.uid,record.source):reference.consumes?.name?resolveResource(index,record,reference.consumes.name):named.length===1?named[0]:null;
       if(ref)Object.assign(reference,{uuid:ref.uuid,name:ref.record.name,source:ref.record.source,...ref.record.className?{className:ref.record.className}:{}});
       (record._bccResourceBindings??=[]).push({activity:_id,index:ti,reference});
-      target.target=ref?.uuid??`bcc-unresolved:${reference.consumes?.name??reference.name??reference.uid??"resource"}`;
+      const deferred=!ref&&!!reference.consumes?.name;
+      if(deferred){reference.name=reference.consumes.name;reference.actorDeferred=true;}
+      target.target=ref?.uuid??(deferred?"":`bcc-unresolved:${reference.name??reference.uid??"resource"}`);
       if(ref)report.information.add(`${context}: native resource target will bind when granted to an Actor`);
-      else report.unresolved.add(`${context}: resource target has no unique definition (${reference.consumes?.name??reference.name??reference.uid??"unknown"})`);
+      else if(deferred)report.information.add(`${context}: resource ${reference.name} will be resolved against the receiving Actor`);
+      else report.unresolved.add(`${context}: resource target has no unique definition (${reference.name??reference.uid??"unknown"})`);
     }
+    if(normalized.activity?.id&&idByFoundryId.has(normalized.activity.id))normalized.activity.id=idByFoundryId.get(normalized.activity.id);
     if(normalized.activity?.foundryId){const id=idByFoundryId.get(normalized.activity.foundryId);if(id)normalized.activity={id};else{report.unresolved.add(`${context}: unresolved forwarded activity ${normalized.activity.foundryId}`);continue;}}
     if(a.type==="transform"&&Array.isArray(normalized.profiles))for(const profile of normalized.profiles)if(profile.uuid)profile.uuid=resolveOverlayUUID(profile.uuid,index,"monster",report,context)??"";
     if(a.type==="cast" && normalized.spell?.uuid){
@@ -505,18 +511,18 @@ function normalizeActivities(arr,effects,index,record,report){
     }
     if(Array.isArray(normalized.effects)){
       normalized.effects=normalized.effects.flatMap(e=>{
-        const effectId=effectIdByFoundryId.get(e.foundryId);
-        if(!effectId){report.unresolved.add(`${context}: missing Effect ${e.foundryId}`);return [];}
+        const effectId=effectIdByFoundryId.get(refId(e));
+        if(!effectId){report.unresolved.add(`${context}: missing Effect ${refId(e)}`);(report.sourceDefinitionGaps??=[]).push({owner:record.name,source:record.source,kind:"Effect",reference:refId(e)});return [];}
         const riders={activity:[],effect:[]};
         for(const rider of e.riders?.activity??[]){
-          const id=idByFoundryId.get(rider.foundryId);
+          const id=idByFoundryId.get(refId(rider));
           if(id)riders.activity.push(id);
-          else report.unresolved.add(`${context}: supplemental rider Activity ${rider.foundryId} has no definition; linked enchantment retained without that rider`);
+          else {report.unresolved.add(`${context}: supplemental rider Activity ${refId(rider)} has no definition; linked enchantment retained without that rider`);(report.sourceDefinitionGaps??=[]).push({owner:record.name,source:record.source,kind:"Activity",reference:refId(rider)});}
         }
         for(const rider of e.riders?.effect??[]){
-          const id=effectIdByFoundryId.get(rider.foundryId);
+          const id=effectIdByFoundryId.get(refId(rider));
           if(id)riders.effect.push(id);
-          else report.unresolved.add(`${context}: missing rider Effect ${rider.foundryId}`);
+          else report.unresolved.add(`${context}: missing rider Effect ${refId(rider)}`);
         }
         return [{_id:effectId,level:e.level??{min:null,max:null},riders}];
       });
@@ -560,11 +566,12 @@ export async function convertOne(entry,index,content,report){
   const base={_id,name:record.name,sort:kind==="chapter" ? Number(record.sequence??0)*10000 : 0,flags:originFlags(kind,record,content.sourceId)};
   if(kind==="subclass"&&(index.byShort.get(`${kind}|${canon(record.source)}|${canon(record.name)}`)?.length??0)>1)
     base.name=`${record.name} (${record._bccRules??record.classSource})`;
-  base.flags.bcc.converterVersion="0.1.0";
+  base.flags.bcc.converterVersion="0.1.1";
   base.flags.bcc.targetRules=content.targetRules??"source";
   base.flags.bcc.sourceRules=record.edition??record._bccRules??null;
   base.flags.bcc.dependency=!!record._bccDependency;
   if(record._bccDependencyReasons?.length)base.flags.bcc.dependencyReasons=clone(record._bccDependencyReasons);
+  if(record.resources?.length)base.flags.bcc.resourceAliases=record.resources.map(r=>r.name).filter(Boolean);
   if(record.prerequisite){base.flags.bcc.prerequisites=clone(record.prerequisite);base.flags.bcc.prerequisiteExpression=compilePrerequisites(record);for(const issue of unsupportedPrerequisites(base.flags.bcc.prerequisiteExpression))report.incomplete.add(`${record.name}: ${issue}`);}
   if(kind==="spell")base.flags.bcc.spellMetadata=spellMetadata(record,index);
   if(kind==="race")base.flags.bcc.speciesIdentifiers=[...new Set([record.name,record._bccVariantOf?.name,record.raceName,record._baseName].filter(Boolean).map(slug))];
@@ -673,7 +680,7 @@ export async function convertOne(entry,index,content,report){
 
   if(["race","background","class","subclass"].includes(kind))await buildGrants(index,kind,record,adv,report);
   sys.identifier=record.foundryIdentifier??overlay?.identifier??sys.identifier;
-  let effects=[];
+  let effects=normalizeEffects([...(overlay?.effects??[]),...(record.foundryEffects??[])],kind,record,report);
   if(record.foundrySystem)applySystemFields(sys,record.foundrySystem);
   if(overlay){
     if(overlay.system)applySystemFields(sys,overlay.system);
@@ -682,7 +689,6 @@ export async function convertOne(entry,index,content,report){
       if(a.type==="ScaleValue")upsertScaleValue(adv,a,addAdv,slug);
       else if(a.type!=="ScaleValue")report.incomplete.add(`${record.name}: supplemental ${a.type} advancement deferred`);
     }
-    effects=normalizeEffects(overlay.effects,kind,record,report);
     if(Array.isArray(overlay.activities)){
       const native=normalizeActivities(overlay.activities,effects,index,record,report);
       if(Object.keys(native).length || overlay.activities.length===0) {
@@ -735,8 +741,9 @@ export async function convertOne(entry,index,content,report){
   if(kind==="spell" && !Object.keys(sys.activities??{}).length)report.incomplete.add(`${record.name}: spell has no native Activity`);
   return {...base,type:documentType,system:sys,...effects.length?{effects}:{} };
 }
-export function createReport(content){return {sourceContext:content.sourceContext,dependencyReasons:content.dependencyReasons??[],information:new Set(),preparationWarnings:[],dependencies:content.dependencies??{},preparationIssues:content.preparationIssues??[],sourceId:content.sourceId,counts:{...content.counts},
+export function createReport(content){return {sourceContext:content.sourceContext,includeDependencies:content.includeDependencies!==false,externalDependencies:content.externalDependencies??[],dependencyReasons:content.dependencyReasons??[],information:new Set(),preparationWarnings:[],dependencies:content.dependencies??{},preparationIssues:content.preparationIssues??[],sourceId:content.sourceId,counts:{...content.counts},
   created:{},updated:{},existing:{},errors:[],warnings:[],validationFailures:[],unresolved:new Set(),incomplete:new Set((content.preparationIssues??[]).map(i=>`${i.category} / ${i.name}: ${i.message}`)),unlocalizedImages:new Set()};}
 export function finalizeReport(report){return {...report,information:[...report.information],unresolved:[...report.unresolved],incomplete:[...report.incomplete],unlocalizedImages:[...report.unlocalizedImages],
+  diagnostics:{persistenceErrors:report.errors.length,unresolvedReferences:report.unresolved.size,partialMechanics:report.incomplete.size,sourceDefinitionGaps:report.sourceDefinitionGaps??[],imageDownloadFailures:report.assets?.failures?.length??0,imagesUnresolved:report.assets?.unresolved?.length??0,genericPrerequisitesSupported:[...report.information].filter(s=>s.includes("generic runtime")||s.includes("generic evaluator")).length},
   generatedAt:new Date().toISOString()};}
 export { PACK_DEFS };

@@ -31,6 +31,8 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           for f in scripts/*.mjs; do node --check "$f"; done
           node tests/native-structures.mjs
+          node tests/transactions-and-grants.mjs
+          node tests/book-exports.mjs
           node -e 'const m = require("./module.json"); if (m.id !== "book-compendium-converter") process.exit(1)'
 
       - name: Package distribution
