@@ -25,6 +25,13 @@ function toolKey(name,index) {
   return ["art","game","music"].includes(category)?`${category}:${match.key}`:match.key;
 }
 export function applyNativeTraits(record, adv, add, report,index) {
+  const combined=[...(record._bccTraitChoices??[])];
+  for(const block of record.skillToolLanguageProficiencies??[]){
+    for(const [key,category]of [['anySkill','skills'],['anyTool','tool'],['anyLanguage','languages']])if(Number(block[key])>0)combined.push({count:Number(block[key]),pool:[`${category}:*`]});
+    for(const choice of list(block.choose)){const pool=[];for(const value of choice.from??[]){if(value==='anySkill')pool.push('skills:*');else if(value==='anyTool')pool.push('tool:*');else if(value==='anyLanguage')pool.push('languages:*');else report.incomplete.add(`${record.name}: unsupported mixed proficiency ${value}`);}if(pool.length)combined.push({count:Number(choice.count??1),pool});}
+    if(Object.keys(block).some(k=>!['choose','anySkill','anyTool','anyLanguage'].includes(k)))report.incomplete.add(`${record.name}: mixed proficiency grants require review`);
+  }
+  for(const choice of combined)add(adv,{type:'Trait',name:'Choose Proficiency',level:Number(record._bccGrantLevel??0),configuration:{mode:'default',allowReplacements:!!choice.replacement,grants:[],choices:[{count:choice.count,pool:choice.pool}]},value:{},...(choice.replacement?{flags:{bcc:{restReplacement:choice.replacement}}}:{})});
   function specific(name,trait){
     const metadata=index?.proficiencyItems?.[normalized(name)];
     if(!metadata)return null;

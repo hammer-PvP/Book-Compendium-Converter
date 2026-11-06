@@ -1,4 +1,6 @@
 import {clone, canonical as lc, plainText} from "./data-model.mjs";
+import {analyzeFeature} from "./feature-analysis.mjs";
+import {spellReplacementRules} from "./spell-recipes.mjs";
 import {availableLevel} from "./feature-mechanics.mjs";
 /** Project only variants which change named features and leave every other species field intact. */
 export function speciesGraph(input) {
@@ -38,8 +40,9 @@ export function speciesGraph(input) {
   }
   const retained = races.filter(r => !projected.has(r));
   for (const race of retained) for (const entry of race.entries ?? []) if (entry?.name && Array.isArray(entry.entries) && ["entries","section"].includes(entry.type)) {
-    features.push({name:entry.name,source:race.source,page:race.page,edition:race.edition,_bccRules:race._bccRules,raceName:race.name,raceSource:race.source,entries:clone(entry.entries),_bccImageParent:{kind:"race",name:race._bccVariantOf?.name??race.name,source:race._bccVariantOf?.source??race.source},
-      _bccChoiceTemplate:!!entry._bccChoiceTemplate,_bccGrantLevel:availableLevel(entry),_bccDependency:race._bccDependency,_bccIgnored:!!race._bccSpeciesTemplate});
+    const parentSpell=spellReplacementRules(entry.entries).some(r=>JSON.stringify(race.additionalSpells??[]).toLowerCase().includes(JSON.stringify(r.initial).toLowerCase()));
+    features.push(analyzeFeature({name:entry.name,source:race.source,_bccSpellOnParent:parentSpell,_bccTraitsOnParent:!!(race.skillProficiencies||race.toolProficiencies||race.skillToolLanguageProficiencies),page:race.page,edition:race.edition,_bccRules:race._bccRules,raceName:race.name,raceSource:race.source,entries:clone(entry.entries),_bccImageParent:{kind:"race",name:race._bccVariantOf?.name??race.name,source:race._bccVariantOf?.source??race.source},
+      _bccChoiceTemplate:!!entry._bccChoiceTemplate,_bccGrantLevel:availableLevel(entry),_bccDependency:race._bccDependency,_bccIgnored:!!race._bccSpeciesTemplate},{parent:parentSpell?race:null}));
   }
   return {races:retained,features};
 }

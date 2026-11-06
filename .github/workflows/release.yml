@@ -34,6 +34,7 @@ jobs:
           node tests/transactions-and-grants.mjs
           node tests/book-exports.mjs
           node tests/patch-regressions.mjs
+          node tests/book-isolation-and-features.mjs
           node -e 'const m = require("./module.json"); if (m.id !== "book-compendium-converter") process.exit(1)'
 
       - name: Package distribution

@@ -108,7 +108,7 @@ export function registerPrerequisiteRuntime(){
   });
   Hooks.on("renderApplicationV2",app=>{decorateApplication(app).catch(e=>console.error("BCC | Prerequisite UI",e));});
   const connect=async()=>{
-    const stale=[...(game.modules?.values?.()??[])].filter(m=>m.active&&m.flags?.bcc?.exportVersion&&m.flags.bcc.runtimeVersion!=='0.1.2');
+    const stale=[...(game.modules?.values?.()??[])].filter(m=>m.active&&m.flags?.bcc?.exportVersion&&m.flags.bcc.runtimeVersion!=='0.1.3');
     if(stale.length&&game.user?.isGM)ui.notifications.warn(`BCC: gere novamente os módulos exportados antigos antes de testar personagens: ${stale.map(m=>m.id).join(', ')}`);
     if(!game.modules?.get("dnd5e-character-builder")?.active)return;
     try{const path=foundry.utils.getRoute?.("modules/dnd5e-character-builder/scripts/services/level-up-rules-service.mjs")??"modules/dnd5e-character-builder/scripts/services/level-up-rules-service.mjs";const {LevelUpRulesService}=await import(new URL(path,globalThis.location.href).href);await registerCastingAdapter(path);if(typeof LevelUpRulesService?.buildContext==="function"&&typeof LevelUpRulesService?.apply==="function")installConsumerAdapter(LevelUpRulesService);

@@ -1,6 +1,8 @@
 import {castingOptions} from "./casting-profile.mjs";
 import {variantBases,equipmentRules} from "./magic-variants.mjs";
-import {normalizeSpellRecipes} from "./spell-recipes.mjs";
+import {normalizeSpellRecipes,spellReplacementRules} from "./spell-recipes.mjs";
+import {normalizeBulkAmmunition} from "./bundles.mjs";
+import {analyzeFeature} from "./feature-analysis.mjs";
 import {specialEquipmentReference} from "./equipment.mjs";
 import {parseSpellFilter,matchesSpellMetadata} from "./spell-filter.mjs";
 import {equipmentCategoryPool} from "./equipment.mjs";
@@ -52,7 +54,8 @@ export async function readLibraryBook(id, options = {}) {
   for(const path of [...paths.slice(0,10),`book/book-${canon(sourceId)}.json`])if(!data[path])issues.push({category:"source",name:path,source:sourceId,message:"Source data file unavailable; related coverage is incomplete"});
   const addData = d => {for(const kind of KINDS)for(const r of d?.[kind]??[]){raw[kind].push(r);const rule=ruleOf(r);if(rule&&(rule==="2024"||!sourceRules.has(canon(r.source))))sourceRules.set(canon(r.source),rule);}};
   for (const path of paths.slice(0, 9)) addData(data[path]);
-  raw.item.push(...(data["items-base.json"]?.baseitem ?? []).map(r=>({...r,_bccBaseEquipment:true})));
+  const bases=data["items-base.json"]?.baseitem??[];
+  raw.item.push(...bases.map(r=>({...normalizeBulkAmmunition(r,bases),_bccBaseEquipment:true})));
   for (const group of data["items.json"]?.itemGroup ?? []) raw.item.push({...clone(group), _bccGroupItems: clone(group.items ?? []), _bccIsGroup: true});
   for (const filename of new Set(Object.values(data["class/index.json"] ?? {}))) addData(await readJson(`class/${filename}`, {optional: true}));
   const foundry = {class: data["class/foundry.json"], race: data["foundry-races.json"], feat: data["foundry-feats.json"], item: data["foundry-items.json"], optionalfeature: data["foundry-optionalfeatures.json"], spell: data["spells/foundry.json"]};
@@ -92,7 +95,8 @@ export async function readLibraryBook(id, options = {}) {
   for (const variant of data["magicvariants.json"]?.magicvariant ?? []) {
     const inherit = variant.inherits ?? {}, source = inherit.source ?? variant.source;
     if (canon(source) !== canon(sourceId)) continue;
-    for (const base of variantBases(data["items-base.json"]?.baseitem??[],variant,source,equipmentRules(inherit)??equipmentRules(variant)??sourceRules.get(canon(source)))) {
+    for (const original of variantBases(bases,variant,source,equipmentRules(inherit)??equipmentRules(variant)??sourceRules.get(canon(source)))) {
+      const base=normalizeBulkAmmunition(original,bases);
       if (!(variant.requires ?? []).some(r => matchesRequirements(base, r)) || (variant.excludes && matchesRequirements(base, variant.excludes))) continue;
       const out = merge(base, inherit);
       out.name = `${inherit.namePrefix ?? ""}${base.name}${inherit.nameSuffix ?? ""}`;
@@ -109,7 +113,8 @@ export async function readLibraryBook(id, options = {}) {
     const key = identity(kind, record);
     if(selected.has(key)){const prior=selected.get(key).record;if(prior._bccDependency&&!prior._bccDependencyReasons.includes(reason))prior._bccDependencyReasons.push(reason);return;}
     const overlay = findSupplement(kind, record, foundry);
-    const result = normalizeSpellRecipes(overlay?.entryData ? merge(record, overlay.entryData) : clone(record));
+    const merged=overlay?.entryData?merge(record,overlay.entryData):clone(record);
+    const result=["feat","optionalfeature","classFeature","subclassFeature"].includes(kind)?analyzeFeature(merged):normalizeSpellRecipes(merged);
     result._bccDependency = dependency&&!belongsToBook(record); result._bccDependencyReasons=result._bccDependency?[reason]:[]; result._bccIgnored=!!overlay?.isIgnored;
     if(kind==="monster" && record.legendaryGroup)result._bccLegendary=(data["bestiary/legendarygroups.json"]?.legendaryGroup??[]).find(g=>canon(g.name)===canon(record.legendaryGroup.name)&&canon(g.source)===canon(record.legendaryGroup.source)); selected.set(key, {kind, record: result}); queue.push({kind, record: result});
     for (const [childKind, children] of Object.entries(overlay?.subEntities ?? {})) for (const child of children) {
@@ -145,6 +150,7 @@ export async function readLibraryBook(id, options = {}) {
     // Native activity references and structured mechanical fields are mandatory.
     const mechanical={...record};for(const key of ["entries","fluff","additionalEntries","startingEquipment"])delete mechanical[key];
     collectReferences(mechanical,refs);
+    if(["classFeature","subclassFeature","feat"].includes(kind)&&/\b(?:gain|choose|take)\b[^.]{0,180}\bfeat\b/i.test(JSON.stringify(record.entries??[])))collectReferences(record.entries,refs);
     function featureReferences(v){
       if(Array.isArray(v))v.forEach(featureReferences);
       else if(v&&typeof v==="object"){
@@ -210,18 +216,23 @@ export async function readLibraryBook(id, options = {}) {
       }
     }
     recipeFilters(record.additionalSpells);
+    for(const rule of record._bccSpellReplacements??[])selectors.add(rule.filter);
+    for(const rule of spellReplacementRules(record.entries)){refs.push(["spell",rule.initial]);selectors.add(rule.filter);}
     for(const filter of selectors){
-      if(!recipeCache.has(filter)){
+      const cacheKey=JSON.stringify([filter,ruleOf(record)??sourceRules.get(canon(record.source)),canon(record.source)]);
+      if(!recipeCache.has(cacheKey)){
         const parsed=parseSpellFilter(filter),matches=[];
+        const compatible=Object.entries(lookup??{}).filter(([src])=>sourceRules.get(canon(src))===(ruleOf(record)??sourceRules.get(canon(record.source)))).map(([src,entries])=>[src,Object.values(entries).filter(lists=>!parsed?.classes||Object.values(lists.class??{}).some(group=>Object.keys(group).some(n=>parsed.classes.includes(canon(n))))).length]).sort((a,b)=>b[1]-a[1]);
+        const allowed=new Set([canon(sourceId),canon(record.source),canon(compatible[0]?.[0])]);
         if(parsed)for(const [src,spellEntries] of Object.entries(lookup??{})){
-          if(canon(src)!==canon(sourceId))continue;
+          if(!allowed.has(canon(src)))continue;
           const names=new Set(Object.entries(spellEntries).filter(([,lists])=>!parsed.classes||Object.values(lists.class??{}).some(group=>Object.keys(group).some(n=>parsed.classes.includes(canon(n))))).map(([name])=>canon(name)));
           if(!names.size)continue;await loadSeries("spell",src);
           for(const candidate of catalog("spell"))if(canon(candidate.source)===canon(src)&&names.has(canon(candidate.name))&&matchesSpellMetadata(candidate,parsed))matches.push(["spell",`${candidate.name}|${candidate.source}`]);
         }
-        recipeCache.set(filter,matches);
+        recipeCache.set(cacheKey,matches);
       }
-      refs.push(...recipeCache.get(filter));
+      refs.push(...recipeCache.get(cacheKey));
     }
     for (const member of [...(record._bccGroupItems??[]),...(record.packContents??[])]) refs.push(["item", typeof member === "string" ? member : member.item]);
     function spells(v) {
@@ -239,9 +250,9 @@ export async function readLibraryBook(id, options = {}) {
   const records = Object.fromEntries(KINDS.map(kind => [kind, [...selected.values()].filter(x => x.kind === kind).map(x => x.record)]));
   for(const rows of Object.values(records))for(const r of rows)r._bccRules=(r.classSource?sourceRules.get(canon(r.classSource)):null)??ruleOf(r)??sourceRules.get(canon(r.source))??null;
   const chapters = volume?.bookData?.find(e => canon(e.id) === canon(sourceId))?.data ?? [];
-  return {book, sourceId,includeDependencies:options.includeDependencies!==false, chapters, records, foundry, sourceContext:{token:session.token,...session.metadata}, spellLookup: lookup,proficiencyItems:Object.fromEntries(catalog("item").map(r=>[canon(r.name).replace(/[^a-z0-9]/g,""),{name:r.name,type:r.type,weaponCategory:r.weaponCategory,property:r.property??[],source:r.source}])),
+  return {book, sourceId,includeDependencies:false, chapters, records, foundry, sourceContext:{token:session.token,...session.metadata}, spellLookup: lookup,proficiencyItems:Object.fromEntries(catalog("item").map(r=>[canon(r.name).replace(/[^a-z0-9]/g,""),{name:r.name,type:r.type,weaponCategory:r.weaponCategory,property:r.property??[],source:r.source}])),
     preparationIssues: [...new Map(issues.filter(i=>canon(i.source)===canon(sourceId)||[...selected.values()].some(e=>e.kind===i.category&&canon(e.record.name)===canon(i.name)&&canon(e.record.source)===canon(i.source))).map(i => [JSON.stringify(i), i])).values()],
     dependencyReasons:[...selected.values()].filter(e=>e.record._bccDependency).map(e=>({kind:e.kind,name:e.record.name,source:e.record.source,reasons:e.record._bccDependencyReasons})),
     dependencies: Object.fromEntries(KINDS.map(k => [k, records[k].filter(r => r._bccDependency).length])),
-    counts: Object.fromEntries(KINDS.map(k => [k, records[k].filter(r=>options.includeDependencies!==false||!r._bccDependency).length]))};
+    counts: Object.fromEntries(KINDS.map(k => [k, records[k].filter(r=>!r._bccDependency).length]))};
 }

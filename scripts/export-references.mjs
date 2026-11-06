@@ -2,6 +2,7 @@
 export function referenceRole(path,document){
   if(path.includes('externalReferences')){const at=path.indexOf('externalReferences'),ref=document?.flags?.bcc?.externalReferences?.[path[at+1]];return document?.type==='subclass'&&ref?.kind==='class'&&path.at(-1)==='uuid'?'required':'provenance';}
   if(path.includes('_stats')||path.includes('actorOrigin')||path.includes('sourceContext')||path.includes('assets'))return 'provenance';
+  if(path.includes('bundleComponent')&&path.at(-1)==='template')return 'provenance';
   if(path.includes('description')||path.includes('text')&&path.includes('content'))return 'descriptive';
   return 'required';
 }

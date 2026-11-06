@@ -34,7 +34,7 @@ export function itemType(r) {
   if (["M","R"].includes(type)) return "weapon";
   if (["LA","MA","HA","S","SCF","RD","WD","RG","W"].includes(type)) return "equipment";
   if (["AT","T","GS","INS"].includes(type)) return "tool";
-  if (["P","SC","FD","A"].includes(type) || r.miscTags?.includes("CNS")) return "consumable";
+  if (["P","SC","FD","A","AF"].includes(type) || r.miscTags?.includes("CNS")) return "consumable";
   if (r.containerCapacity || type === "C") return "container";
   return "loot";
 }
@@ -45,9 +45,9 @@ export function damagePart(formula, type) {
 }
 export function buildEquipment(record, system, report) {
   const type = itemType(record), code = String(record.type ?? "").split("|")[0];
-  system.quantity = 1;
-  if (record.weight != null) system.weight = {value:Number(record.weight),units:"lb"};
-  if (record.value != null) system.price = {value:Number(record.value)/100,denomination:"gp"};
+  const lot=Number(record._bccBulk?.quantity??1);system.quantity=lot;
+  if (record.weight != null) system.weight = {value:Number(record.weight)/lot,units:"lb"};
+  if (record.value != null) system.price = {value:Number(record.value)/100/lot,denomination:"gp"};
   const rarity = lc(record.rarity).replaceAll(" ", "");
   if (["common","uncommon","rare","veryrare","legendary","artifact"].includes(rarity)) system.rarity = rarity;
   system.attunement = record.reqAttune ? "required" : "";
@@ -74,8 +74,8 @@ export function buildEquipment(record, system, report) {
     const ability = /Ability:?\s*(Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma)/i.exec(plainText(record.entries));
     if (ability) system.ability = ability[1].slice(0,3).toLowerCase();
   } else if (type === "consumable") {
-    system.type = {value:({P:"potion",SC:"scroll",A:"ammo",FD:"food"}[code] ?? "trinket")};
-    if (code === "A") {system.damage = {base:damagePart("0",DAMAGE[record.dmgType])};system.ammunition = {type:system.identifier};}
+    system.type = {value:({P:"potion",SC:"scroll",A:"ammo",AF:"ammo",FD:"food"}[code] ?? "trinket")};
+    if (["A","AF"].includes(code)) {system.damage = {base:damagePart("0",DAMAGE[record.dmgType])};system.ammunition = {type:String(record._bccBulk?.unitName??record._bccBaseItem?.split('|')[0]??record.name).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')};}
   } else if (type === "container") {
     const capacity = record.containerCapacity ?? {};
     const weight = capacity.weight?.[0] ?? capacity.weight;

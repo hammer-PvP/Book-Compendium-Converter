@@ -1,4 +1,7 @@
+import {registerBookLinks} from "./book-links.mjs";
+import {registerFeatureRuntime} from "./feature-runtime.mjs";
 import {registerPrerequisiteRuntime} from "./prerequisite-runtime.mjs";
+import {reconcileBookLinks} from "./book-dependencies.mjs";
 import {refreshSources} from "./source.mjs";
 import {registerSpellLists} from "./spell-lists.mjs";
 import {registerResourceBindings} from "./resource-bindings.mjs";
@@ -10,7 +13,7 @@ const ID="book-compendium-converter";
 let app;
 Hooks.once("init",()=>{
   game.settings.register(ID,"sourceMode",{name:"Fonte de dados",hint:"Online funciona sem instalar dados ou imagens. Local usa a pasta bcc/5etools existente.",scope:"world",config:true,type:String,choices:{online:"5etools online",local:"5etools local (opcional)"},default:"online",onChange:()=>{refreshSources();if(app){app.preview=null;app.result=null;app.load().then(()=>app.render());}}});
-  registerPrerequisiteRuntime();
+  registerBookLinks();registerFeatureRuntime();registerPrerequisiteRuntime();
   game.settings.register(ID,"importRules",{scope:"world",config:false,type:String,default:"source"});
   game.settings.register(ID,"exportTargets",{scope:"world",config:false,type:Object,default:{}});
   game.settings.register(ID,"spellLists",{scope:"world",config:false,type:Array,default:[]});
@@ -18,7 +21,8 @@ Hooks.once("init",()=>{
   registerResourceBindings();
   game.settings.register(ID,"lastImport",{name:"Last Import",scope:"world",config:false,type:Object,default:{}});
 });
-Hooks.once("ready",()=>{
+Hooks.once("ready",async()=>{
+  if(game.user.isGM)try{await reconcileBookLinks();}catch(error){console.error("BCC | Book references",error);ui.notifications.warn("BCC: não foi possível atualizar os vínculos entre livros. Consulte o console.");}
   setTimeout(()=>registerSpellLists(),0);
   if(!game.user.isGM)return;
   game.bcc={
@@ -27,10 +31,10 @@ Hooks.once("ready",()=>{
       if(app.rendered){app.bringToFront();return app;}
       await app.load();await app.render(true);return app;
     },
-    getBooks,readBook,version:"0.1.2"
+    getBooks,readBook,version:"0.1.3"
   };
   // The sidebar may already be rendered before the ready hook.
   injectBCCShortcut(null,ui.compendium?.element);
-  console.info("BCC 0.1.2 | Ready. Acesse pelo botão na aba Compêndios ou game.bcc.open()");
+  console.info("BCC 0.1.3 | Ready. Acesse pelo botão na aba Compêndios ou game.bcc.open()");
 });
 Hooks.on("renderCompendiumDirectory",injectBCCShortcut);

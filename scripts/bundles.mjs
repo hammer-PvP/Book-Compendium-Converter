@@ -1,4 +1,11 @@
 import {stableId} from "./hash.mjs";
+/** Homogeneous ammunition is quantity, with variant properties on the ammo. */
+export function normalizeBulkAmmunition(record,catalog){
+  const code=r=>String(r.type??'').split('|')[0].toUpperCase();if(!['A','AF'].includes(code(record))||record.packContents?.length!==1)return record;
+  const spec=record.packContents[0],quantity=Number(spec?.quantity);if(!spec?.item||!Number.isInteger(quantity)||quantity<2)return record;
+  const [name,source]=spec.item.toLowerCase().split('|'),base=catalog.find(r=>r.name.toLowerCase()===name&&r.source.toLowerCase()===(source??record.source.toLowerCase()));
+  if(!base||code(base)!==code(record)||base.packContents?.length)return record;const out=structuredClone(record);delete out.packContents;out._bccBulk={quantity,unitName:base.name,unitSource:base.source};return out;
+}
 /** Native containers reference sibling Item documents, not embedded Items.
  * Materialize independent contents per bundle; leave catalog templates intact. */
 export async function materializeBundles(index,lookup){

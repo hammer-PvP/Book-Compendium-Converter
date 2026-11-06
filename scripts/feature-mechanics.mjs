@@ -43,6 +43,7 @@ export function resourceUses(record) {
   return {max:String(max),spent:0,recovery:resourceRecovery(record)};
 }
 export function resourceRecovery(record){
+  if(/finish\s+\{@dice\s+[^}]+\}\s+\{@variantrule\s+Long Rest/i.test(JSON.stringify(record.entries??[])))return [];
   const text=plainText(record.entries),recoveries=[];
   const pattern=/regain\s+(all|one|two|three|\d+)\s+([a-z' ]{0,45}?)\b(?:uses?|charges?|points?)\b[^.]{0,100}?(short|long) rest/gi;
   for(const match of text.matchAll(pattern)){
@@ -57,12 +58,13 @@ export function resourceRecovery(record){
 export function genericActivity(record, {activation, ability, attackBonus, saveDC, actor = false} = {}) {
   const raw = textOf(record.entries), text = plainText(record.entries);
   const attack = /\{@(?:atk|atkr)\s+([^}]+)\}/i.exec(raw);
-  const save = /\{@actSave\s+([a-z]+)/i.exec(raw) ?? /(?:DC\s+\d+\s+)?(Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) saving throw/i.exec(text);
+  const selfOverride=/when you fail a saving throw[^.]*you can succeed instead/i.test(text);
+  const save = selfOverride?null:/\{@actSave\s+([a-z]+)/i.exec(raw) ?? /(?:DC\s+\d+\s+)?(Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) saving throw/i.exec(text);
   const damage = [...raw.matchAll(new RegExp(`\\{@damage\\s+([^}|]+)(?:\\|[^}]*)?\\}\\s+(${DAMAGE})?`,"gi"))];
   const heal = /(?:regains?|restore)[^.]*hit points/i.test(text);
   const action = activation ?? (/\b(?:bonus action|Bonus Action)\b/.test(text) ? "bonus" : /\breaction\b/i.test(text) ? "reaction" : /\b(?:as an? action|as a Magic action|take the Magic action)\b/i.test(text) ? "action" : null);
   const uses = resourceUses(record);
-  if (!attack && !save && !damage.length && !heal && !action && !uses) return null;
+  if (!attack && !save && !damage.length && !heal && !action && !uses&&!selfOverride) return null;
   const type = attack ? "attack" : save ? "save" : heal ? "heal" : damage.length ? "damage" : "utility";
   const result = {_id:"bccBasicActivity",name:record.name,type,activation:{type:action ?? (actor ? "action" : ""),value:1}};
   const duration = /(?:lasts? for|for the next|for)\s+(\d+)\s+(round|minute|hour|day)s?\b/i.exec(text);

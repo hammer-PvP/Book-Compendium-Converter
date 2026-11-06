@@ -22,6 +22,8 @@ import {packAddress, WORLD_DESTINATION} from "./destination.mjs";
 import {findSupplement} from "./library-source.mjs";
 import {speciesGraph} from "./species.mjs";
 import {buildEquipment, buildStartingEquipment, itemType} from "./equipment.mjs";
+import {analyzeFeature,featureCoverage} from "./feature-analysis.mjs";
+import {filterSpellPool} from "./additional-spells.mjs";
 import {availableLevel, buildFeature, addProgressionScales, resourceUses, resourceRecovery, resourceScales, genericActivity} from "./feature-mechanics.mjs";
 import {plainText, clone, merge, canonical as lc, DEFAULT_SOURCES} from "./data-model.mjs";
 import {synthesizeSpell} from "./spell-activities.mjs";
@@ -88,7 +90,7 @@ export async function buildIndex(content, destination = WORLD_DESTINATION) {
     for(const option of options)records.optionalfeature.push({name:`${cls.name}: ${option.label}`,source:cls.source,edition:cls.edition,_bccRules:cls._bccRules,_bccDependency:cls._bccDependency,_bccAuxiliary:true,entries:[],_bccCastingRole:{...option,classIdentifier:sourceIdentifier("class",cls,content),classSource:cls.source}});
   }
   const lists=[];
-  for(const [kind,rows] of [["class",records.class],["subclass",records.subclass]])for(const r of rows)if((content.includeDependencies!==false||!r._bccDependency)&&(r.casterProgression||r.additionalSpells?.some(b=>b.expanded)))lists.push({pageId:await idFor(`spell-list:${entityKey(kind,r)}`),name:r.name,source:r.source,_bccRules:r._bccRules,identifier:r.foundryIdentifier??findSupplement(kind,r,content.foundry)?.identifier??slug(r.name),className:r.className??r.name,classSource:r.classSource??r.source,ownerName:r.name,listType:kind,additionalSpells:clone(r.additionalSpells??[]),castingOptions:r._bccCastingOptions??[]});
+  for(const [kind,rows] of [["class",records.class],["subclass",records.subclass]])for(const r of rows)if(!r._bccDependency&&(r.casterProgression||r.additionalSpells?.some(b=>b.expanded)))lists.push({pageId:await idFor(`spell-list:${entityKey(kind,r)}`),name:r.name,source:r.source,_bccRules:r._bccRules,identifier:r.foundryIdentifier??findSupplement(kind,r,content.foundry)?.identifier??slug(r.name),className:r.className??r.name,classSource:r.classSource??r.source,ownerName:r.name,listType:kind,additionalSpells:clone(r.additionalSpells??[]),castingOptions:r._bccCastingOptions??[]});
   if(lists.length)records.spellList.push({name:"Spell Lists",source:content.sourceId,lists});
   for(const [kind,rows] of Object.entries(records))if(kind!=="spellList")for(const record of rows){
     if((record.additionalSpells?.length??0)>1){
@@ -576,12 +578,12 @@ function applyFeatAbilityAdvancement(record,adv,report){
   if(record.ability.length>1 && !choice)report.incomplete.add(`${record.name}: multiple ability alternatives require GM review`);
 }
 export async function convertOne(entry,index,content,report){
-  const {kind,_id} = entry,record=clone(entry.record);
+  const {kind,_id}=entry,featureKind=kind==="feat"||kind==="optionalfeature"||kind.endsWith("Feature"),record=featureKind?analyzeFeature(entry.record):clone(entry.record);
   const desc=renderEntries(record.entries??[],index,record.source,report);
   const base={_id,name:record.name,sort:kind==="chapter" ? Number(record.sequence??0)*10000 : 0,flags:originFlags(kind,record,content.sourceId)};
   if(kind==="subclass"&&(index.byShort.get(`${kind}|${canon(record.source)}|${canon(record.name)}`)?.length??0)>1)
     base.name=`${record.name} (${record._bccRules??record.classSource})`;
-  base.flags.bcc.converterVersion="0.1.2";
+  base.flags.bcc.converterVersion="0.1.3";
   base.flags.bcc.targetRules=content.targetRules??"source";
   base.flags.bcc.sourceRules=record.edition??record._bccRules??null;
   base.flags.bcc.dependency=!!record._bccDependency;
@@ -649,7 +651,7 @@ export async function convertOne(entry,index,content,report){
     if(kind==="class")for(const scale of resourceScales(record,index,slug))addAdv(adv,scale);
   } else if(kind==="feat"||kind==="optionalfeature"||kind.endsWith("Feature")){
     buildFeature(record,sys,report,slug,kind);
-    if(kind==="raceFeature"&&record._bccOption)applyTraits(record,adv,report,index);
+    applyTraits(record,adv,report,index);
     if(kind==="optionalfeature"){
       const normalize=value=>String(value).split(".").at(-1).toLowerCase().replace(/[^a-z0-9]/g,"").replace(/s$/,"");
       const names=[...index.records.class,...index.records.subclass].flatMap(r=>(r.optionalfeatureProgression??[]).filter(p=>p.featureType?.some(t=>record.featureType?.includes(t))).map(p=>p.name));
@@ -755,6 +757,13 @@ export async function convertOne(entry,index,content,report){
   }
   consolidateScaleValues(adv,slug,report,record.name);
   applyRulesAdvancements(kind,record,adv,report);
+  if(featureKind){
+    const replacements=[];
+    for(const rule of record._bccSpellReplacements??[]){const initial=lookupUid(index,'spell',rule.initial,record.source),pool=filterSpellPool(rule.filter,index,record,spellRefsForClass,report);if(!initial||!pool.length){report.unresolved.add(`${record.name}: incomplete rest spell replacement pool`);continue;}replacements.push({...rule,initialUuid:initial.uuid,pool:pool.map(e=>({uuid:e.uuid,name:e.record.name}))});}
+    if(replacements.length){base.flags.bcc.restSpells=replacements;sys.activities??={};sys.activities.bccReplaceSpell1={_id:'bccReplaceSpell1',name:'Replace Cantrip after Long Rest',type:'utility',activation:{type:'',value:1},flags:{bcc:{restReplacement:'spell'}}};}
+    if(Object.values(adv).some(a=>a.flags?.bcc?.restReplacement)){sys.activities??={};sys.activities.bccReplaceTrait1={_id:'bccReplaceTrait1',name:'Replace Proficiency after Long Rest',type:'utility',activation:{type:'',value:1},flags:{bcc:{restReplacement:'trait'}}};}
+    base.flags.bcc.mechanicCoverage=featureCoverage(record,sys,adv,effects,report);
+  }
   if(Object.keys(adv).length)sys.advancement=adv;
   const documentType=overlay?.type??record.foundryType??(kind==="raceFeature"||["classFeature","subclassFeature","optionalfeature"].includes(kind)?"feat":
     kind==="item"?classifyItem(record):PACK_DEFS[kind][3]);
@@ -767,7 +776,7 @@ export function createReport(content){return {sourceContext:content.sourceContex
 export function groupDiagnostics(messages){
   const groups=new Map();for(const message of messages){const text=String(message),at=text.indexOf(': '),owner=at<0?'':text.slice(0,at),cause=at<0?text:text.slice(at+2);if(!groups.has(cause))groups.set(cause,{cause,count:0,owners:[]});const group=groups.get(cause);group.count++;if(owner&&!group.owners.includes(owner))group.owners.push(owner);}return [...groups.values()];
 }
-export function finalizeReport(report){return {...report,information:[...report.information],unresolved:[...report.unresolved],incomplete:[...report.incomplete],unlocalizedImages:[...report.unlocalizedImages],
+export function finalizeReport(report){return {...report,converterVersion:"0.1.3",information:[...report.information],unresolved:[...report.unresolved],incomplete:[...report.incomplete],unlocalizedImages:[...report.unlocalizedImages],
   diagnostics:{groups:{unresolved:groupDiagnostics(report.unresolved),incomplete:groupDiagnostics(report.incomplete)},otherBooksPending:(report.reconciliation?.pendingDetails??[]).filter(d=>d.sourceId!==report.sourceId),persistenceErrors:report.errors.length,unresolvedReferences:report.unresolved.size,partialMechanics:report.incomplete.size,sourceDefinitionGaps:report.sourceDefinitionGaps??[],recoveredReferences:report.recoveredReferences??[],imageDownloadFailures:report.assets?.failures?.length??0,imagesUnresolved:report.assets?.unresolved?.length??0,genericPrerequisitesSupported:[...report.information].filter(s=>s.includes("generic runtime")||s.includes("generic evaluator")).length},
   generatedAt:new Date().toISOString()};}
 export { PACK_DEFS };

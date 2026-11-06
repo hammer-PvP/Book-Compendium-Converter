@@ -1,6 +1,8 @@
 import {contentHash} from "./integrity.mjs";
 import {stableId} from "./hash.mjs";
 import {packAddress} from "./destination.mjs";
+import {selectBookProvider} from './book-links.mjs';
+import {referenceRole} from './export-references.mjs';
 const rows=v=>v?.contents??Array.from(v?.values?.()??v??[]);
 const rules=v=>({one:"2024",classic:"2014"}[v]??v);
 export async function providerCatalog(){
@@ -17,10 +19,11 @@ export async function providerCatalog(){
 export function chooseProvider(catalog,key,rule){
   let candidates=(catalog.get(key)??[]).filter(p=>!rule||!p.rules||p.rules==="unspecified"||p.rules===rules(rule));
   const primary=candidates.filter(p=>!p.dependency);if(primary.length)candidates=primary;
+  if(candidates.some(c=>c.sourceId))return selectBookProvider(candidates,key.split('|')[1],{preferWorld:true});
   return candidates.length===1?{...candidates[0],status:"available"}:{status:candidates.length?"ambiguous":"missing"};
 }
 export async function applyDependencyPolicy(index,content,packDefs){
-  if(content.includeDependencies!==false)return;
+  content.includeDependencies=false;
   const catalog=await providerCatalog(),dependencies=[],remap=new Map(),parents=new Map(index.all.map(e=>[e._id,e]));
   for(const entry of index.all){
     if(!entry.record._bccDependency||entry.record._bccBundleInstance)continue;
@@ -53,8 +56,8 @@ export function mapStrings(value,replace){
   return value;
 }
 export function externalReferencesFor(doc,index){
-  const serialized=JSON.stringify(doc);
-  return (index.externalReferences??[]).filter(e=>serialized.includes(e.uuid)||doc.type==="subclass"&&e.kind==="class"&&e.identity.split("|")[1]===doc.flags?.bcc?.identity?.split("|")[4]&&e.name.toLowerCase().replace(/[^a-z0-9]+/g,"-")===doc.system.classIdentifier);
+  const required=[];function walk(value,path=[]){if(typeof value==='string'){if(referenceRole(path,doc)==='required')required.push(value);}else if(Array.isArray(value))value.forEach((v,i)=>walk(v,[...path,i]));else if(value&&typeof value==='object')for(const [k,v]of Object.entries(value))walk(v,[...path,k]);}walk(doc);
+  return (index.externalReferences??[]).filter(e=>required.some(s=>s.includes(e.uuid))||doc.type==="subclass"&&e.kind==="class"&&e.identity.split("|")[1]===doc.flags?.bcc?.identity?.split("|")[4]&&e.name.toLowerCase().replace(/[^a-z0-9]+/g,"-")===doc.system.classIdentifier);
 }
 /** Rebind only declared BCC links after the supplying book is imported. */
 export async function reconcileBookLinks(){

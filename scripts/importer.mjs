@@ -3,7 +3,7 @@ import {getSourceSession} from "./source.mjs";
 import {AssetImporter} from "./assets.mjs";
 import {organizeDocuments} from "./organization.mjs";
 import {contentHash, auditReferences} from "./integrity.mjs";
-import {saveSpellLists} from "./spell-lists.mjs";
+import {saveSpellLists,forgetDocumentSpellLists} from "./spell-lists.mjs";
 import {prepareRules} from "./rules-policy.mjs";
 import {sourceColor} from "./source-colors.mjs";
 import {buildIndex, convertOne, createReport, finalizeReport, PACK_DEFS} from "./converter.mjs";
@@ -43,6 +43,20 @@ async function getPack(index,kind,folder,content){
 }
 
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+/** Rebuild prunes only obsolete, unedited BCC copies from this book. */
+export async function pruneCopiedDependencies(content,index,report){
+  const prefix=`world.bcc-${String(content.sourceId).toLowerCase().replace(/[^a-z0-9]+/g,'-')}-`,kept=new Set(index.all.filter(e=>!e.external).map(e=>e.uuid));
+  for(const pack of game.packs.values()){
+    if(!pack.collection.startsWith(prefix))continue;
+    const docs=await pack.getDocuments(),byId=new Map(docs.map(d=>[d.id??d._id,d])),remove=[];
+    for(const doc of docs){const b=doc.flags?.bcc;if(b?.sourceId!==content.sourceId||kept.has(doc.uuid??`Compendium.${pack.collection}.${pack.documentName}.${doc.id??doc._id}`))continue;
+      const parent=byId.get(doc.system?.container);if(!b.dependency&&!parent?.flags?.bcc?.dependency)continue;
+      if(!b.contentHash||b.contentHash!==await contentHash(doc)){report.warnings.push(`${doc.name}: cópia externa antiga com alterações locais preservada; remova-a manualmente se não precisar dela.`);continue;}remove.push(doc.id??doc._id);
+    }
+    const safe=new Set(remove);let changed=true;while(changed){changed=false;for(const doc of docs)if(doc.system?.container&&safe.has(doc.system.container)&&!safe.has(doc.id??doc._id)){safe.delete(doc.system.container);changed=true;}}
+    if(safe.size){const ids=[...safe];await forgetDocumentSpellLists(pack,ids);await getDocumentClass(pack.documentName).deleteDocuments(ids,{pack:pack.collection,deleteContents:true,bccBookOwnershipMigration:true});report.information.add(`${pack.collection}: ${ids.length} obsolete unedited dependency copies removed`);}
+  }
+}
 const transientError=error=>/timeout|timed out|network|failed to fetch|502|503|504|429|connection reset|socket hang up|aborterror/i.test(String(error?.message??error));
 function recordFailure(report,kind,doc,error,phase){
   const issue={category:kind,name:doc.name,id:doc._id,phase,message:String(error?.message??error)};
@@ -192,7 +206,7 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
     const pack=await getPack(index,kind,folder,content);
     const docs=[];
     for (const entry of entries){
-      try{ const doc=await convertOne(entry,index,content,report);const refs=externalReferencesFor(doc,index);if(refs.length){doc.flags.bcc.externalReferences=refs;for(const ref of refs)if(ref.status!=="available")report.unresolved.add(`${doc.name}: external ${ref.source} / ${ref.name} is ${ref.status}`);}docs.push(doc); }
+      try{ const doc=await convertOne(entry,index,content,report);const refs=externalReferencesFor(doc,index);if(refs.length){doc.flags.bcc.externalReferences=refs;for(const ref of refs)if(ref.status==="ambiguous")report.unresolved.add(`${doc.name}: external ${ref.source} / ${ref.name} is ${ref.status}`);}docs.push(doc); }
       catch(e){report.errors.push(`${kind} / ${entry.record.name}: conversão — ${e.message}`);}
       processed++;if(processed%20===0){progress("convert",completed,`${LABELS[kind]}: convertendo ${processed}/${total}...`);await pause(0);}
     }
@@ -209,6 +223,7 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
     await createBatch(pack,docs,kind,report,options,count=>{completed=before+count;progress("write",completed,`${LABELS[kind]}: ${completed}/${total} documentos processados...`);});
     completed=before+entries.length;
   }
+  if(options.mode==='rebuild')await pruneCopiedDependencies(content,index,report);
   progress("verify",completed,"Conferindo listas de magias e finalizando relatório...");
   await assets.verify();
   if(report.assets.failures.length)report.warnings.push(`${report.assets.failures.length} image sources failed; details are listed in assets.failures`);
@@ -225,13 +240,13 @@ export async function importBook(content, onProgress=()=>{}, options={mode:"crea
   for(const issue of await saveSpellLists(verifiedLists))report.incomplete.add(`Spell-list registration ${issue.uuid}: ${issue.message}`);
   if(options.mode!=="create")report.information.add("Reload Foundry after rebuilding to refresh the native spell-list registry. Obsolete packs and documents are not automatically removed.");
   if(content.sourceContext)report.sourceContext={token:content.sourceContext.token,...getSourceSession(content).metadata};
-  if(content.includeDependencies===false){const reconciliation=await reconcileBookLinks();report.reconciliation=reconciliation;for(const issue of reconciliation.pendingDetails.filter(d=>d.sourceId===content.sourceId))report.unresolved.add(`${issue.owner}: ${issue.source} / ${issue.name} (${issue.status})`);report.information.add(`${reconciliation.updated} documents rebound to available book dependencies`);}
+  if(content.includeDependencies===false){const reconciliation=await reconcileBookLinks();report.reconciliation=reconciliation;report.externalRequirements=reconciliation.pendingDetails.filter(d=>d.sourceId===content.sourceId);for(const issue of report.externalRequirements.filter(d=>d.status==='ambiguous'))report.unresolved.add(`${issue.owner}: ${issue.source} / ${issue.name} (${issue.status})`);report.information.add(`${reconciliation.updated} documents rebound to available book dependencies`);}
   else await reconcileBookLinks();
   report.countDocuments=total;
   report.persistedTotal=Object.values(report.created).reduce((a,b)=>a+b,0)+Object.values(report.updated).reduce((a,b)=>a+b,0)+
     Object.values(report.existing).reduce((a,b)=>a+b,0);
   report.failedCount=report.validationFailures.length;
-  report.status=report.errors.length?"failed":(report.unresolved.size||report.incomplete.size?"incomplete":"complete");
+  report.status=report.errors.length?"failed":(report.unresolved.size||report.incomplete.size?"incomplete":report.externalRequirements?.length?"external-requirements":"complete");
   const output=finalizeReport(report);
   const audit={sourceId:content.sourceId,bookName:content.book.name,compendiumFolder:folder.id,
     countByType:output.created,importedAt:output.generatedAt};

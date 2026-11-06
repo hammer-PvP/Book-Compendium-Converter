@@ -19,7 +19,8 @@ export function prepareRules(content,target="source"){
     for(const r of out.records.subclass){const key=[r.name,r.source,r.className].map(canon).join("|");if(!groups.has(key))groups.set(key,[]);groups.get(key).push(r);}
     out.records.subclass=[...groups.values()].flatMap(rows=>{const preferred=rows.filter(r=>recordRules(r)===target);return preferred.length===1?preferred:rows;});
   }
-  for(const [kind,rows] of Object.entries(out.records)){out.counts[kind]=rows.length;out.dependencies[kind]=rows.filter(r=>r._bccDependency).length;}
+  out.includeDependencies=false;
+  for(const [kind,rows] of Object.entries(out.records)){out.counts[kind]=rows.filter(r=>!r._bccDependency).length;out.dependencies[kind]=rows.filter(r=>r._bccDependency).length;}
   return out;
 }
 function moveChoices(table,floor){
